@@ -1,0 +1,13 @@
+{
+  "url": "https://www.procosmet.com/en",
+  "horodatage_utc": "2026-08-22T01:20:21.592Z",
+  "horodatage_local": "22/08/2026 03:20:21",
+  "fuseau": "Europe/Paris",
+  "langue_navigateur": "it-IT",
+  "editeur_detecte": [],
+  "declencheur_trouve": null,
+  "widget_ouvert": false,
+  "texte_visible_widget": null,
+  "erreur": "page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://www.procosmet.com/en\nCall log:\n\u001b[2m  - navigating to \"https://www.procosmet.com/en\", waiting until \"domcontentloaded\"\u001b[22m\n",
+  "avertissement": "Relevé factuel automatisé. Aucune qualification juridique. À relire avant usage."
+}
