@@ -1,0 +1,15 @@
+[
+  {
+    "url": "https://reedsy.com/",
+    "horodatage_utc": "2026-08-22T01:20:26.290Z",
+    "horodatage_local": "22/08/2026 03:20:26",
+    "fuseau": "Europe/Paris",
+    "langue_navigateur": "en-GB",
+    "editeur_detecte": [],
+    "declencheur_trouve": null,
+    "widget_ouvert": false,
+    "texte_visible_widget": null,
+    "erreur": "page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://reedsy.com/\nCall log:\n\u001b[2m  - navigating to \"https://reedsy.com/\", waiting until \"domcontentloaded\"\u001b[22m\n",
+    "avertissement": "Relevé factuel automatisé. Aucune qualification juridique. À relire avant usage."
+  }
+]
