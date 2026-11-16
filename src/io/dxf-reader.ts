@@ -159,7 +159,7 @@ function common(r: Rec): Common {
       else if (c === 1000 && inXdata) {
         const s = r.vals[i]
         const k = s.indexOf('=')
-        if (k > 0) (props ??= {})[s.slice(0, k)] = s.slice(k + 1)
+        if (k > 0) (props ??= {})[s.slice(0, k)] = s.slice(k + 1).trimEnd()
       }
       continue
     }
@@ -284,6 +284,7 @@ function parseMText(r: Rec, c: Common): EText | null {
   let dx = 0
   let dy = 0
   let hasDir = false
+  let width = 0
   for (let i = 0; i < r.n; i++) {
     const code = r.codes[i]
     if (code === 101) break // objet imbriqué : les codes suivants ne décrivent plus le texte
@@ -297,6 +298,9 @@ function parseMText(r: Rec, c: Common): EText | null {
         break
       case 40:
         h = parseFloat(v)
+        break
+      case 41:
+        width = parseFloat(v)
         break
       case 50:
         rot = parseFloat(v) * DEG
@@ -332,6 +336,7 @@ function parseMText(r: Rec, c: Common): EText | null {
     ha,
     va,
     multi: true,
+    ...(width > 0 ? { width } : {}),
   }
 }
 

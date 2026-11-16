@@ -74,7 +74,7 @@ const norm = (s: string) =>
 function headerRole(cell: string): keyof ColumnMap | null {
   const h = norm(cell)
   if (!h) return null
-  if (/^(n°|no|num|numero|nopoint|point|pt|pts|mat|matricule|id|ident|identifiant|nom|name|s|sommet|borne)$/.test(h)) return 'id'
+  if (/^(n°|no|num|numero|nopoint|point|points|p|pt|pts|mat|matricule|id|ident|identifiant|nom|name|s|sommet|borne|bornes)$/.test(h)) return 'id'
   if (/^(x|e|est|east|easting|abscisse|xm|em)$/.test(h)) return 'x'
   if (/^(y|n|nord|north|northing|ordonnee|ym|nm)$/.test(h)) return 'y'
   if (/^(z|alt|altitude|altitudes|h|elev|elevation|cote|zm|hauteur)$/.test(h)) return 'z'
@@ -211,6 +211,21 @@ export function parsePointsText(text: string, forced?: Partial<ColumnMap> & { de
     if (columns.code < 0) {
       const t = texts.filter((s) => s.c !== columns.id)
       if (t.length) columns.code = t[t.length - 1].c
+    }
+  }
+  if (hasHeader && columns.x >= 0 && columns.y >= 0) {
+    // En-tête partiellement reconnu : l'identifiant et le code sont déduits du contenu des colonnes restantes.
+    const used = () => new Set([columns.id, columns.x, columns.y, columns.z, columns.code])
+    const textual = (c: number) => body.filter((r) => r[c] && Number.isNaN(parseNumber(r[c]))).length / Math.max(1, body.length)
+    const integers = (c: number) => body.every((r) => !r[c] || /^\s*\d+\s*$/.test(r[c]))
+    if (columns.id < 0 && !used().has(0) && columnCount > 2 && (textual(0) > 0.3 || integers(0))) columns.id = 0
+    if (columns.code < 0) {
+      for (let c = columnCount - 1; c >= 0; c--) {
+        if (!used().has(c) && textual(c) > 0.3) {
+          columns.code = c
+          break
+        }
+      }
     }
   }
   if (forced) {

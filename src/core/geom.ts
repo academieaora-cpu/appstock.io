@@ -299,6 +299,39 @@ export function cleanMText(s: string): string {
     .replace(/[{}]/g, '')
 }
 
+/** Largeur approximative d'un texte en police sans empattement, pour une hauteur de majuscule `h`. */
+export function approxTextWidth(text: string, h: number): number {
+  let em = 0
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if (c === 32) em += 0.28
+    else if (c >= 48 && c <= 57) em += 0.556
+    else if (c >= 65 && c <= 90) em += c === 73 ? 0.28 : c === 77 || c === 87 ? 0.89 : 0.68
+    else if ("iljtf.,;:'|!".indexOf(text[i]) >= 0) em += 0.27
+    else if (c === 109 || c === 119) em += 0.8
+    else em += 0.53
+  }
+  return (em * h) / 0.716
+}
+
+/** Renvoie à la ligne un texte dont la zone a une largeur donnée (MTEXT). */
+export function wrapText(text: string, width: number, h: number): string {
+  if (!(width > 0)) return text
+  const out: string[] = []
+  for (const para of text.split('\n')) {
+    let line = ''
+    for (const word of para.split(' ')) {
+      const next = line ? line + ' ' + word : word
+      if (line && approxTextWidth(next, h) > width) {
+        out.push(line)
+        line = word
+      } else line = next
+    }
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
 /** Décode les séquences spéciales des textes DXF (%%d, \U+XXXX…). */
 export function decodeDxfText(s: string): string {
   if (s.indexOf('%%') < 0 && s.indexOf('\\U+') < 0 && s.indexOf('\\M+') < 0) return s
@@ -441,7 +474,7 @@ export function walkDataset(ds: Dataset, project: Projector | null, sink: Sink, 
     const q = tp(m, ux, uy)
     const h = Math.hypot(q[0] - p[0], q[1] - p[1])
     const rot = Math.atan2(q[1] - p[1], q[0] - p[0]) - Math.PI / 2
-    if (h > 0 && e.text) sink.text(p[0], p[1], h, rot, e.text, e.ha, e.va, style)
+    if (h > 0 && e.text) sink.text(p[0], p[1], h, rot, e.width ? wrapText(e.text, e.width, e.h) : e.text, e.ha, e.va, style)
   }
 
   const insertMatrix = (e: EInsert, parent: Affine | null, bx: number, by: number, col: number, row: number): Affine => {

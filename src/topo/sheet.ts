@@ -287,7 +287,7 @@ function drawGrid(p: Painter, spec: SheetSpec, g: SheetGeometry): void {
   }
   for (const x of xs) {
     const xx = px(x)
-    if (xx < frame.x + 4 || xx > frame.x + frame.w - 4) continue
+    if (xx < frame.x + 12 * k || xx > frame.x + frame.w - 6) continue
     line(p, xx, frame.y + frame.h - 2.5, xx, frame.y + frame.h + 1.5, 0.25)
     line(p, xx, frame.y - 1.5, xx, frame.y + 2.5, 0.25)
     p.text(xx - 1, frame.y + frame.h - 3.5, cap, Math.PI / 2, label(x), 0, 0, BLACK)

@@ -189,12 +189,13 @@ function matchWkt(wkt: string): string | null {
   return null
 }
 
-const converters = new Map<string, proj4.Converter>()
-function converter(from: string, to: string): proj4.Converter {
+type Converter = { forward(p: number[]): number[] }
+const converters = new Map<string, Converter>()
+function converter(from: string, to: string): Converter {
   const key = from + '>' + to
   let c = converters.get(key)
   if (!c) {
-    c = proj4(from, to)
+    c = proj4(from, to) as unknown as Converter
     converters.set(key, c)
   }
   return c

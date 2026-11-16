@@ -135,6 +135,8 @@ export interface EText extends Base {
   va: 0 | 1 | 2 | 3
   /** Texte multiligne (MTEXT). */
   multi?: boolean
+  /** Largeur de la zone de texte (MTEXT) : le texte est renvoyé à la ligne au-delà. */
+  width?: number
 }
 
 /** Insertion de bloc. */
