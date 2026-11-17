@@ -137,6 +137,8 @@ export interface EText extends Base {
   multi?: boolean
   /** Largeur de la zone de texte (MTEXT) : le texte est renvoyé à la ligne au-delà. */
   width?: number
+  /** Étiquette d'attribut de bloc (MAT, ALT, COD…). */
+  tag?: string
 }
 
 /** Insertion de bloc. */
@@ -189,6 +191,8 @@ export interface Block {
   bx: number
   by: number
   entities: Entity[]
+  /** Définitions d'attributs (non dessinées : ce sont les attributs des insertions qui s'affichent). */
+  attdefs?: EText[]
 }
 
 /** Transformation affine 2D : x' = a·x + c·y + e ; y' = b·x + d·y + f. */

@@ -203,7 +203,7 @@ function base(c: Common) {
   return b
 }
 
-function parseText(r: Rec, c: Common, attrib: boolean): EText | null {
+function parseText(r: Rec, c: Common, attrib: boolean, allowEmpty = false): EText | null {
   let x = 0
   let y = 0
   let z = 0
@@ -254,7 +254,7 @@ function parseText(r: Rec, c: Common, attrib: boolean): EText | null {
         break
     }
   }
-  if (!text) return null
+  if (!text && !allowEmpty) return null
   let ha: 0 | 1 | 2 = 0
   let va: 0 | 1 | 2 | 3 = (v7x >= 0 && v7x <= 3 ? v7x : 0) as 0 | 1 | 2 | 3
   if (h72 === 1) ha = 1
@@ -679,7 +679,10 @@ export function parseDxf(bytes: Uint8Array, options: ParseOptions): Dataset {
         const a = parseText(r, c, true)
         const tag = r.str(2)
         if (a) {
-          if (tag) (pendingInsert.props ??= {})[tag] = a.text
+          if (tag) {
+            a.tag = tag
+            ;(pendingInsert.props ??= {})[tag] = a.text
+          }
           if (!invisible) (pendingInsert.attribs ??= []).push(a)
         }
       }
@@ -753,10 +756,13 @@ export function parseDxf(bytes: Uint8Array, options: ParseOptions): Dataset {
         break
       case 'ATTDEF':
         // Définition d'attribut : affichée uniquement hors bloc (dans un bloc, ce sont les ATTRIB des insertions qui s'affichent).
-        if (!block) {
-          const tag = r.str(2)
-          const t = parseText(r, c, true) ?? (tag ? parseText(Object.assign(r, {}), c, true) : null)
-          push(t)
+        {
+          const def = parseText(r, c, true, true)
+          if (def) {
+            def.tag = r.str(2)
+            if (block && !skipBlock) (block.attdefs ??= []).push(def)
+            else if (!block) push({ ...def, text: def.text || def.tag || '' })
+          }
         }
         break
       case 'INSERT': {

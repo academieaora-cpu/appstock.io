@@ -101,7 +101,7 @@ describe('génération du plan', () => {
   })
 
   it('organise le dessin en calques et signale ce qui reste à valider', () => {
-    for (const layer of ['01_POINTS', '05_BORNES', '06_LIMITES', '07_BATIMENTS', '11_COURBES_NIVEAU', '12_COURBES_MAITRESSES']) expect(plan.dataset.layers.has(layer)).toBe(true)
+    for (const layer of ['TOPOJIS', 'TopoMat', 'TopoAlt', '01_POINTS', '05_BORNES', '06_LIMITES', '07_BATIMENTS', '11_COURBES_NIVEAU', '12_COURBES_MAITRESSES']) expect(plan.dataset.layers.has(layer)).toBe(true)
     expect(plan.report.some((r) => r.level === 'alerte' && /à valider par le géomètre/.test(r.message))).toBe(true)
   })
 
@@ -127,8 +127,17 @@ describe('génération du plan', () => {
     const dl2 = buildDisplayList(back, null)
     expect(dl2.counts).toEqual(dl.counts)
     for (let i = 0; i < 4; i++) expect(dl2.extent[i]).toBeCloseTo(dl.extent[i], 6)
+    // Séquence conforme au format : INSERT, ATTRIB, ATTRIB, puis un seul SEQEND.
+    const types = (out.data as string).split('\n').filter((_, i, a) => i % 2 === 1 && a[i - 1].trim() === '0').map((l) => l.trim())
+    expect(types.join(' ')).toContain('INSERT ATTRIB ATTRIB SEQEND INSERT')
+    expect(types.join(' ')).not.toContain('SEQEND ATTRIB')
     const borne = back.entities.find((e) => e.t === 'insert' && e.props?.MAT === 'B.1')
-    expect(borne?.props).toMatchObject({ MAT: 'B.1', ALT: '745.57', COD: 'BORN' })
+    expect(borne?.props).toMatchObject({ MAT: 'B.1', ALT: '745.570', COD: 'BORN' })
+    // Le bloc de point topographique est celui de Covadis, avec de vrais attributs.
+    expect(back.blocks.get('TCPOINT')!.attdefs!.map((d) => d.tag)).toEqual(['MAT', 'ALT', 'COD'])
+    const tn = back.entities.find((e) => e.t === 'insert' && e.block === 'TCPOINT' && e.props?.COD === 'TN')
+    expect(tn && tn.t === 'insert' && tn.attribs!.map((a) => `${a.tag}@${a.layer}`)).toEqual(['MAT@TopoMat', 'ALT@TopoAlt'])
+    expect(tn && tn.t === 'insert' && tn.layer).toBe('TOPOJIS')
   })
 })
 

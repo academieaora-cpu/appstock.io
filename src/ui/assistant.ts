@@ -124,7 +124,7 @@ export function openAssistant(project: Project, source: { name: string; text: st
   let raw = source?.text ?? ''
   let file: PointsFile | null = raw ? parsePointsText(raw) : null
   let rules: CodeRule[] = loadRules()
-  const options: PlanOptions = { ...DEFAULT_PLAN }
+  const options: PlanOptions = { ...DEFAULT_PLAN, offset: [0, 0, 0] }
   let confirmed = false
   let crs: string | null = null
   let candidates: CrsCandidate[] = []
@@ -295,6 +295,23 @@ export function openAssistant(project: Project, source: { name: string; text: st
         checkbox('Triangulation visible', options.showTin, (v) => (options.showTin = v)),
         checkbox('Lisser les courbes', options.smoothContours, (v) => (options.smoothContours = v)),
       ),
+      h('h3', null, 'Semis de points (options de chargement, comme dans Covadis)'),
+      h(
+        'div',
+        { class: 'row' },
+        field('Décimales de l’altitude', select([['0', '0'], ['1', '1'], ['2', '2'], ['3', '3']], String(options.altDecimals), (v) => (options.altDecimals = Number(v)))),
+        field('Insertion du semis', select([['3d', 'en 3D (altitude sur le point)'], ['2d', 'en 2D']], options.insert3d ? '3d' : '2d', (v) => (options.insert3d = v === '3d'))),
+        checkbox('Insérer les points pour Z = 0', options.includeZeroZ, (v) => (options.includeZeroZ = v)),
+        checkbox('Insérer aussi les symboles', options.symbols, (v) => (options.symbols = v)),
+      ),
+      h(
+        'div',
+        { class: 'row' },
+        ...(['X', 'Y', 'Z'] as const).map((axis, i) =>
+          field(`Décalage selon ${axis} (m)`, h('input', { type: 'number', step: 0.001, value: options.offset[i], onchange: (e: Event) => (options.offset[i] = parseFloat((e.target as HTMLInputElement).value) || 0) })),
+        ),
+      ),
+      h('p', { class: 'muted' }, 'Les points sont insérés en blocs TCPOINT (attributs MAT, ALT, COD) sur les calques TOPOJIS, TopoMat et TopoAlt : le DXF exporté est reconnu par Covadis. Laissez les décalages à 0 pour conserver les coordonnées du fichier.'),
     )
     showUnderstood()
     root.append(s5)

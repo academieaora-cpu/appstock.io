@@ -21,7 +21,7 @@ export interface ExportResult {
 
 const RAD = 180 / Math.PI
 
-type Target = Pick<DxfWriter, 'addLine' | 'addLWPolyline' | 'addPolyline3D' | 'addPoint' | 'addCircle' | 'addArc' | 'addText' | 'addInsert' | 'addEllipse'>
+type Target = Pick<DxfWriter, 'addLine' | 'addLWPolyline' | 'addPolyline3D' | 'addPoint' | 'addCircle' | 'addArc' | 'addText' | 'addInsert' | 'addEllipse' | 'addAttrib' | 'addAttdef'>
 
 function safeName(name: string): string {
   return name.replace(/[<>/\\":;?*|=`,]/g, '_').slice(0, 250) || 'calque'
@@ -134,10 +134,47 @@ function writeNative(t: Target, e: Entity, layerName: (n: string) => string, tol
         ...(e.cols && e.rows ? { columnCount: e.cols, rowCount: e.rows, columnSpacing: e.dx ?? 0, rowSpacing: e.dy ?? 0 } : {}),
       })
       xdata(ins, e.props)
-      if (e.attribs) for (const a of e.attribs) writeNative(t, a, layerName, tol, inBlock)
+      if (e.attribs) {
+        for (const a of e.attribs) {
+          // Attribut étiqueté : écrit comme attribut du bloc, reconnu par AutoCAD et Covadis.
+          if (a.tag) t.addAttrib(point3d(a.x, a.y, a.z ?? 0), a.h, a.tag, a.text, ins, textOptions(a, layerName(a.layer), a.color === -1 ? undefined : colorToAci(a.color)))
+          else writeNative(t, a, layerName, tol, inBlock)
+        }
+      }
       return true
     }
   }
+}
+
+/**
+ * Remet au format DXF deux écarts de la bibliothèque d'écriture sur les attributs de bloc :
+ * elle termine chaque attribut par un SEQEND (un seul est attendu, après le dernier attribut
+ * d'une insertion) et écrit l'alignement vertical des ATTRIB/ATTDEF sous le code 73 au lieu de 74.
+ * Sans cette correction, AutoCAD et Covadis peuvent ne lire que le premier attribut.
+ */
+export function fixAttributeSequences(dxf: string): string {
+  const lines = dxf.split('\n')
+  const out: string[] = []
+  // Début de chaque enregistrement (couple code 0 / type).
+  const starts: number[] = []
+  for (let i = 0; i + 1 < lines.length; i += 2) if (lines[i].trim() === '0') starts.push(i)
+  starts.push(lines.length - (lines.length % 2))
+  for (let k = 0; k + 1 < starts.length; k++) {
+    const from = starts[k]
+    const to = starts[k + 1]
+    const type = lines[from + 1].trim()
+    const next = k + 2 < starts.length ? lines[starts[k + 1] + 1].trim() : ''
+    if (type === 'SEQEND' && next === 'ATTRIB') continue
+    if (type === 'ATTRIB' || type === 'ATTDEF') {
+      for (let i = from; i < to; i += 2) {
+        out.push(lines[i].trim() === '73' ? lines[i].replace('73', '74') : lines[i], lines[i + 1])
+      }
+    } else {
+      for (let i = from; i < to; i++) out.push(lines[i])
+    }
+  }
+  for (let i = starts[starts.length - 1]; i < lines.length; i++) out.push(lines[i])
+  return out.join('\n')
 }
 
 /** Export DXF d'un ou plusieurs jeux, dans le système `target` (null : coordonnées telles quelles). */
@@ -172,6 +209,9 @@ export function exportDxf(items: Item[], target: string | null, name: string): E
         const blk = dxf.addBlock(safeName(b.name))
         blk.basePoint = point3d(b.bx, b.by, 0)
         for (const e of b.entities) if (!writeNative(blk as unknown as Target, e, layerName, tol, true)) simplified++
+        for (const d of b.attdefs ?? []) {
+          if (d.tag) (blk as unknown as Target).addAttdef(point3d(d.x, d.y, 0), d.h, d.tag, d.text, textOptions(d, layerName(d.layer), d.color === -1 ? undefined : colorToAci(d.color)))
+        }
       }
       for (const e of ds.entities) if (!writeNative(dxf as unknown as Target, e, layerName, tol, false)) simplified++
     } else {
@@ -207,7 +247,7 @@ export function exportDxf(items: Item[], target: string | null, name: string): E
   }
   if (simplified) notes.push(`${simplified} entité(s) simplifiée(s) : splines écrites en polylignes, surfaces pleines écrites en contours.`)
   if (exploded) notes.push(`${exploded} bloc(s) éclaté(s) et courbes discrétisées, car le fichier a été reprojeté.`)
-  return { name: name + '.dxf', mime: 'application/dxf', data: dxf.stringify(), notes }
+  return { name: name + '.dxf', mime: 'application/dxf', data: fixAttributeSequences(dxf.stringify()), notes }
 }
 
 // ---------------------------------------------------------------------------

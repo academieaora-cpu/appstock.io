@@ -28,6 +28,16 @@ export interface PlanOptions {
   majorEvery: number
   smoothContours: boolean
   showTin: boolean
+  /** Nombre de décimales de l'attribut altitude. */
+  altDecimals: number
+  /** Insérer les points en 3D (altitude portée par le point) ou en 2D. */
+  insert3d: boolean
+  /** Insérer aussi les points dont l'altitude vaut exactement 0. */
+  includeZeroZ: boolean
+  /** Insérer aussi les symboles (arbre, poteau, regard…) sur les points. */
+  symbols: boolean
+  /** Changement de repère demandé par l'utilisateur : décalage en X, Y, Z. */
+  offset: [number, number, number]
 }
 
 export const DEFAULT_PLAN: PlanOptions = {
@@ -41,6 +51,11 @@ export const DEFAULT_PLAN: PlanOptions = {
   majorEvery: 5,
   smoothContours: true,
   showTin: false,
+  altDecimals: 3,
+  insert3d: true,
+  includeZeroZ: true,
+  symbols: true,
+  offset: [0, 0, 0],
 }
 
 export interface ParcelVertex {
@@ -134,10 +149,21 @@ export function computeParcel(vertices: ParcelVertex[]): Parcel {
   return { vertices, sides, area: Math.abs(ringArea(flat)), perimeter: sides.reduce((a, b) => a + b, 0) }
 }
 
-export function generatePlan(points: SurveyPoint[], rules: CodeRule[], options: PlanOptions, name = 'Plan'): PlanResult {
+export function generatePlan(input: SurveyPoint[], rules: CodeRule[], options: PlanOptions, name = 'Plan'): PlanResult {
   const ds = newDataset(name, 'Dessin généré', 'cad')
   const k = options.scale / 1000 // mètres terrain par millimètre papier
   const report: PlanResult['report'] = []
+  let points = input
+  const [ox, oy, oz] = options.offset
+  if (ox || oy || oz) {
+    points = points.map((p) => ({ ...p, x: p.x + ox, y: p.y + oy, z: p.z === null ? null : p.z + oz }))
+    report.push({ level: 'alerte', message: `Changement de repère appliqué à votre demande : décalage X ${ox} m, Y ${oy} m, Z ${oz} m. Les coordonnées du dessin diffèrent du fichier source.` })
+  }
+  if (!options.includeZeroZ) {
+    const kept = points.filter((p) => p.z !== 0)
+    if (kept.length < points.length) report.push({ level: 'alerte', message: `${points.length - kept.length} point(s) d'altitude nulle non insérés (option « insérer les points pour Z = 0 » décochée).` })
+    points = kept
+  }
   const legend = new Map<string, LegendItem>()
   const useLegend = (r: CodeRule) => {
     if (!legend.has(r.label)) legend.set(r.label, { label: r.label, kind: r.kind, color: black(r.color), symbol: r.symbol, lw: r.lw })
@@ -151,11 +177,22 @@ export function generatePlan(points: SurveyPoint[], rules: CodeRule[], options: 
     return layerName
   }
   const lPoints = L('01_POINTS', FOREGROUND, 0.18)
-  const lIds = L('02_NUMEROS_POINTS', 0x0000c0)
-  const lAlt = L('03_ALTITUDES', 0x007f00)
-  const lCodes = L('04_DESCRIPTIONS', 0x606060)
+  // Calques et bloc de point topographique repris de Covadis : un dessin exporté est
+  // reconnu par Covadis (bloc TCPOINT, attributs MAT, ALT, COD).
+  const lJis = L('TOPOJIS', FOREGROUND, 0.18)
+  const lMat = L('TopoMat', FOREGROUND)
+  const lAlt = L('TopoAlt', 0x009a00)
+  const s500 = options.scale / 500 // échelle d'insertion des blocs (1 pour un plan au 1/500)
+  const attdef = (tag: string, layer: string, x: number, y: number, ha: 0 | 2, va: 0 | 3): EText => ({ t: 'text', layer, color: -1, x, y, h: 0.75, rot: 0, text: '', ha, va, tag })
+  ds.blocks.set('TCPOINT', {
+    name: 'TCPOINT',
+    bx: 0,
+    by: 0,
+    entities: [{ t: 'point', layer: '0', color: BYBLOCK, x: 0, y: 0 }],
+    attdefs: [attdef('MAT', lMat, 0.25, 0.25, 0, 0), attdef('ALT', lAlt, 0.25, -0.25, 0, 3), attdef('COD', lAlt, -0.25, -0.25, 2, 3)],
+  })
 
-  const text = (layer: string, x: number, y: number, mm: number, s: string, extra: Partial<EText> = {}): EText => ({
+  const text = (layer: string, x: number, y: number, mm: number, str: string, extra: Partial<EText> = {}): EText => ({
     t: 'text',
     layer,
     color: -1,
@@ -163,51 +200,63 @@ export function generatePlan(points: SurveyPoint[], rules: CodeRule[], options: 
     y,
     h: mm * k,
     rot: 0,
-    text: s,
+    text: str,
     ha: 0,
     va: 0,
     ...extra,
   })
 
-  // --- Points : symbole + numéro + altitude -------------------------------
+  // --- Points : bloc TCPOINT (matricule, altitude, code) + symbole ------------
   const usedSymbols = new Set<SymbolName>()
   let unknown = 0
-  const borneCandidates: SurveyPoint[] = []
+  const isBornePoint = (p: SurveyPoint) => {
+    const m = matchCode(p.code, rules)
+    return m.rule.kind === 'borne' || (m.quality === 'vide' && isBorneName(p.id))
+  }
+  const borneCandidates: SurveyPoint[] = points.filter(isBornePoint)
+  const parcelOn = options.parcel && borneCandidates.length >= 3
   for (const p of points) {
     const m = matchCode(p.code, rules)
     const rule = m.rule
-    const isBorne = rule.kind === 'borne' || (m.quality === 'vide' && isBorneName(p.id))
-    if (isBorne) borneCandidates.push(p)
+    const isBorne = isBornePoint(p)
     if (m.quality === 'inconnu') unknown++
-    const symbol: SymbolName = isBorne ? 'borne' : rule.symbol
-    usedSymbols.add(symbol)
-    const layer = isBorne ? L('05_BORNES', 0xff0000, 0.35) : rule.kind === 'point' && rule.layer !== lPoints ? L(rule.layer, black(rule.color), rule.lw) : lPoints
     const props: Record<string, string | number> = { MAT: p.id }
     if (p.z !== null) props.ALT = p.z
     if (p.code) props.COD = p.code
+    const attribs: EText[] = []
+    const attr = (tag: string, layer: string, dx: number, dy: number, ha: 0 | 2, va: 0 | 3, value: string) =>
+      attribs.push({ t: 'text', layer, color: -1, x: p.x + dx * s500, y: p.y + dy * s500, h: 0.75 * s500, rot: 0, text: value, ha, va, tag })
+    // Le nom d'une borne est déjà écrit en grand à côté de la parcelle.
+    if (options.showIds && p.id && !(isBorne && parcelOn)) attr('MAT', lMat, 0.25, 0.25, 0, 0, p.id)
+    if (options.showZ && p.z !== null) attr('ALT', lAlt, 0.25, -0.25, 0, 3, p.z.toFixed(options.altDecimals))
+    if (options.showCodes && p.code) attr('COD', lAlt, -0.25, -0.25, 2, 3, p.code)
     ds.entities.push({
       t: 'insert',
-      layer,
+      layer: lJis,
       color: -1,
-      block: 'SYM_' + symbol.toUpperCase(),
+      block: 'TCPOINT',
       x: p.x,
       y: p.y,
-      ...(p.z !== null ? { z: p.z } : {}),
-      sx: k,
-      sy: k,
+      ...(options.insert3d && p.z !== null ? { z: p.z } : {}),
+      sx: s500,
+      sy: s500,
       rot: 0,
       props,
+      ...(attribs.length ? { attribs } : {}),
     })
+    if (options.symbols) {
+      const symbol: SymbolName = isBorne ? 'borne' : rule.symbol
+      usedSymbols.add(symbol)
+      const layer = isBorne ? L('05_BORNES', 0xff0000, 0.35) : rule.kind === 'point' && rule.layer !== lPoints ? L(rule.layer, black(rule.color), rule.lw) : lPoints
+      ds.entities.push({ t: 'insert', layer, color: -1, block: 'SYM_' + symbol.toUpperCase(), x: p.x, y: p.y, sx: k, sy: k, rot: 0 })
+    }
     if (m.quality !== 'vide' && m.quality !== 'inconnu') useLegend(isBorne ? { ...rule, kind: 'borne', symbol: 'borne' } : rule)
-    if (options.showIds && p.id && !isBorne) ds.entities.push(text(lIds, p.x + 1.0 * k, p.y + 0.9 * k, 1.5, p.id))
-    if (options.showZ && p.z !== null) ds.entities.push(text(lAlt, p.x + 1.0 * k, p.y - 2.2 * k, 1.4, p.z.toFixed(2)))
-    if (options.showCodes && p.code) ds.entities.push(text(lCodes, p.x + 1.0 * k, p.y - 4.2 * k, 1.3, p.code))
   }
-  for (const s of usedSymbols) {
-    const blk = symbolBlock(s)
+  for (const sym of usedSymbols) {
+    const blk = symbolBlock(sym)
     ds.blocks.set(blk.name, blk)
   }
-  report.push({ level: 'ok', message: `${points.length} points reportés à leurs coordonnées exactes.` })
+  report.push({ level: 'ok', message: `${points.length} points reportés à leurs coordonnées exactes, en blocs TCPOINT (attributs MAT, ALT, COD) comme dans Covadis.` })
   if (unknown) report.push({ level: 'alerte', message: `${unknown} point(s) portent un code non reconnu : dessinés comme simples points, sans liaison. Complétez le dictionnaire de codes si nécessaire.` })
 
   // --- Lignes et surfaces selon les codes ---------------------------------
