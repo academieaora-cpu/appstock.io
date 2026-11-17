@@ -9,6 +9,7 @@
 import type { Extent } from '../core/types'
 import { drawDisplayList, resolveColor, type DrawOptions, type Painter, type RGB, type View } from '../render/painter'
 import type { DisplayList } from '../render/scene'
+import type { SituationMap } from '../render/situation'
 import type { LegendItem, Parcel } from './generate'
 
 export const PAPERS: Record<string, [number, number]> = {
@@ -81,6 +82,16 @@ export interface SheetSpec {
   monochrome: boolean
   /** Mètres terrain par unité de dessin (1 si le dessin est en mètres). */
   unit: number
+  /** Encart « Plan de situation » (affiché par défaut). */
+  showSituation?: boolean
+  /** Échelle du plan de situation (dénominateur). */
+  situationScale?: number
+}
+
+export interface TableRow {
+  label: string
+  x: number
+  y: number
 }
 
 export interface SheetContent {
@@ -88,6 +99,10 @@ export interface SheetContent {
   extent: Extent
   parcel: Parcel | null
   legend: LegendItem[]
+  /** Lignes du tableau des coordonnées (sinon : sommets de la parcelle). */
+  table?: TableRow[] | null
+  /** Extrait de carte du plan de situation, ou raison de son absence. */
+  situation?: SituationMap | string | null
 }
 
 interface Rect {
@@ -140,6 +155,14 @@ export function sheetGeometry(spec: SheetSpec, extent: Extent): SheetGeometry {
   const cx = spec.center ? spec.center[0] : (extent[0] + extent[2]) / 2
   const cy = spec.center ? spec.center[1] : (extent[1] + extent[3]) / 2
   return { w, h, frame, map, k, view: { cx, cy, scale: mmPerUnit, ox: map.x + map.w / 2, oy: map.y + map.h / 2 } }
+}
+
+/** Emplacement de l'encart « Plan de situation » (en haut à gauche de la zone du plan). */
+export function situationRect(g: Pick<SheetGeometry, 'map' | 'k'>): { box: Rect; image: Rect } {
+  const k = g.k
+  const box = { x: g.map.x + 4 * k, y: g.map.y + 4 * k, w: 52 * k, h: 48 * k }
+  const image = { x: box.x + 1.5 * k, y: box.y + 6.5 * k, w: box.w - 3 * k, h: box.h - 11.5 * k }
+  return { box, image }
 }
 
 export interface FitInfo {
@@ -294,12 +317,12 @@ function drawGrid(p: Painter, spec: SheetSpec, g: SheetGeometry): void {
   }
 }
 
-function drawTable(p: Painter, parcel: Parcel, right: number, bottom: number, k: number, maxHeight: number): Rect {
+function drawTable(p: Painter, vertices: TableRow[], right: number, bottom: number, k: number, maxHeight: number): Rect {
   const rowH = 4.0 * k
   const widths = [13 * k, 24 * k, 24 * k]
   const total = widths[0] + widths[1] + widths[2]
   const maxRows = Math.max(1, Math.floor(maxHeight / rowH) - 2)
-  const rows = parcel.vertices.slice(0, maxRows)
+  const rows = vertices.slice(0, maxRows)
   const h = rowH * (rows.length + 2)
   const x = right - total
   const y = bottom - h
@@ -375,23 +398,27 @@ function drawLegend(p: Painter, legend: LegendItem[], x: number, bottom: number,
   })
 }
 
-function scaleBar(p: Painter, cx: number, y: number, spec: SheetSpec, k: number): void {
-  // Barre graphique : longueur « ronde » proche de 40 mm papier.
-  const target = (40 * k * spec.scale) / 1000
-  let length = 1
-  for (const base of [1, 2, 5]) for (let e = -1; e < 6; e++) if (base * 10 ** e <= target) length = Math.max(length, base * 10 ** e)
-  const mm = (length * 1000) / spec.scale
-  const x0 = cx - mm / 2
-  const hbar = 1.2 * k
-  for (let i = 0; i < 4; i++) {
-    const r = { x: x0 + (mm / 4) * i, y, w: mm / 4, h: hbar }
-    if (i % 2 === 0) p.fillPolygon([[r.x, r.y, r.x + r.w, r.y, r.x + r.w, r.y + r.h, r.x, r.y + r.h]], BLACK, 1)
+function situationBox(p: Painter, g: SheetGeometry, spec: SheetSpec, situation: SituationMap | string | null | undefined): void {
+  const { box, image } = situationRect(g)
+  const k = g.k
+  whiteBox(p, box)
+  rect(p, box, 0.3)
+  p.text(box.x + box.w / 2, box.y + 3.4 * k, 2.2 * k, 0, 'PLAN DE SITUATION', 1, 2, BLACK, true)
+  const scale = typeof situation === 'object' && situation ? situation.scale : (spec.situationScale ?? 10000)
+  if (situation && typeof situation === 'object' && p.image) {
+    p.image(situation.canvas, image.x, image.y, image.w, image.h)
+    rect(p, image, 0.2)
+  } else {
+    rect(p, image, 0.2)
+    const msg = typeof situation === 'string' ? situation : 'Chargement de la carte…'
+    p.text(image.x + image.w / 2, image.y + image.h / 2, 1.6 * k, 0, plain(msg).slice(0, 60), 1, 2, BLACK)
   }
-  rect(p, { x: x0, y, w: mm, h: hbar }, 0.2)
-  const cap = 1.5 * k
-  p.text(x0, y + hbar + 1 * k, cap, 0, '0', 1, 3, BLACK)
-  p.text(x0 + mm / 2, y + hbar + 1 * k, cap, 0, String(length / 2), 1, 3, BLACK)
-  p.text(x0 + mm, y + hbar + 1 * k, cap, 0, length + ' m', 1, 3, BLACK)
+  // Petite flèche du nord dans l'encart
+  const nx = image.x + image.w - 3.5 * k
+  const ny = image.y + 2 * k
+  p.fillPolygon([[nx, ny, nx - 1.3 * k, ny + 3.6 * k, nx, ny + 2.8 * k, nx + 1.3 * k, ny + 3.6 * k]], BLACK, 1)
+  p.text(nx, ny + 5.4 * k, 1.5 * k, 0, 'N', 1, 2, BLACK, true)
+  p.text(box.x + box.w / 2, box.y + box.h - 2.5 * k, 1.6 * k, 0, 'Echelle : 1/' + scale.toLocaleString('fr-FR').replace(/\s/g, ' '), 1, 2, BLACK)
 }
 
 function multiline(p: Painter, text: string, x: number, y: number, cap: number, ha: number, bold = false, step = 1.75): number {
@@ -474,8 +501,7 @@ export function drawSheet(p: Painter, spec: SheetSpec, content: SheetContent): S
     const fy = frame.y + frame.h + 6 * k
     const left = [info.ville && info.date ? `${info.ville}, le ${info.date}` : info.date, info.geometre && 'Borné, levé et dressé par :', info.geometre].filter(Boolean) as string[]
     multiline(p, left.join('\n'), 10, fy, 2.0 * k, 0, false, 2.0)
-    p.text(cx, fy + 3.2 * k, 4.2 * k, 0, 'Echelle : 1/' + spec.scale, 1, 0, BLACK, true)
-    scaleBar(p, cx, fy + 6.4 * k, spec, k)
+    p.text(cx, fy + 4.2 * k, 4.2 * k, 0, 'Echelle : 1/' + spec.scale, 1, 0, BLACK, true)
     const rightFoot = [info.systeme, info.mentions].filter(Boolean).join('\n')
     multiline(p, rightFoot, w - 10, fy, 2.0 * k, 2, false, 2.0)
   } else {
@@ -494,13 +520,14 @@ export function drawSheet(p: Painter, spec: SheetSpec, content: SheetContent): S
     const place = [info.lieuDit, info.arrondissement, info.departement, info.region].filter(Boolean).join(', ')
     if (place) p.text(frame.x + 4 * k, y + 6 * k, 2.0 * k, 0, plain(place), 0, 0, BLACK)
     multiline(p, [info.geometre && 'Géomètre : ' + info.geometre, info.date && 'Date : ' + info.date, info.reference && 'Réf. : ' + info.reference].filter(Boolean).join('\n'), c1 + 3 * k, cy + 6 * k, 2.0 * k, 0, false, 2.2)
-    p.text((c2 + frame.x + frame.w) / 2, cy + 8 * k, 3.6 * k, 0, 'Echelle : 1/' + spec.scale, 1, 0, BLACK, true)
-    scaleBar(p, (c2 + frame.x + frame.w) / 2, cy + 11 * k, spec, k * 0.8)
+    p.text((c2 + frame.x + frame.w) / 2, cy + 10 * k, 3.6 * k, 0, 'Echelle : 1/' + spec.scale, 1, 0, BLACK, true)
     multiline(p, [info.systeme, 'Format ' + spec.paper].filter(Boolean).join('\n'), (c2 + frame.x + frame.w) / 2, cy + 22 * k, 1.8 * k, 1, false, 2.0)
   }
 
   // Éléments posés dans la zone du plan
-  if (spec.showNorth) northArrow(p, map.x + 14 * k, map.y + 6 * k, 18 * k)
+  // Flèche du nord au milieu, en haut de la zone du plan (comme sur les plans cadastraux).
+  if (spec.showNorth) northArrow(p, map.x + map.w / 2, map.y + 5 * k, 16 * k)
+  if (spec.showSituation !== false) situationBox(p, g, spec, content.situation)
   if (spec.showArea && content.parcel) {
     const s = 'Superficie = ' + formatArea(content.parcel.area)
     const cap = 3.8 * k
@@ -512,7 +539,8 @@ export function drawSheet(p: Painter, spec: SheetSpec, content: SheetContent): S
     line(p, x - tw, y + 1.4 * k, x, y + 1.4 * k, 0.4)
   }
   const bottom = map.y + map.h - 5 * k
-  if (spec.showTable && content.parcel) drawTable(p, content.parcel, map.x + map.w - 5 * k, bottom, k, map.h * 0.6)
+  const rows = content.table?.length ? content.table : content.parcel?.vertices
+  if (spec.showTable && rows?.length) drawTable(p, rows, map.x + map.w - 5 * k, bottom, k, map.h * 0.6)
   if (spec.showLegend) drawLegend(p, content.legend, map.x + 5 * k, bottom, k, colors)
   return g
 }

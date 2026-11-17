@@ -4,16 +4,19 @@
  * rédigé automatiquement selon le type de plan, et le cadre de la feuille est affiché dans
  * le dessin pour caler le plan avant l'impression.
  */
-import { crsLabel } from '../core/crs'
+import { crsLabel, toLonLat } from '../core/crs'
 import type { Project } from '../core/project'
 import type { Extent } from '../core/types'
 import { closedRing } from '../edit/ops'
-import { toProjectFn } from '../edit/query'
+import { toProjectFn, type Selection } from '../edit/query'
+import { pointsFromSelection } from '../edit/selpoints'
 import { computeParcel, type Parcel } from '../topo/generate'
 import type { MapView } from '../render/mapview'
 import { CanvasPainter } from '../render/painter'
-import { EMPTY_INFO, PAPERS, SCALES, drawSheet, fitInfo, paperSize, sheetGeometry, type SheetContent, type SheetInfo, type SheetSpec, type TemplateName } from '../topo/sheet'
+import { retrySituations, situationMap, situationReady, type SituationMap, type SituationProvider, type SituationRequest } from '../render/situation'
+import { EMPTY_INFO, PAPERS, SCALES, drawSheet, fitInfo, paperSize, sheetGeometry, situationRect, type SheetContent, type SheetInfo, type SheetSpec, type TableRow, type TemplateName } from '../topo/sheet'
 import { checkbox, field, h, modal, save, select, store } from './dom'
+import { territoryFields } from './territoire'
 
 export interface DocMeta {
   date: string
@@ -29,6 +32,26 @@ export interface DocSettings extends SheetSpec {
   meta: DocMeta
   /** Afficher le cadre de la feuille dans le dessin. */
   showFrame: boolean
+  /** Tableau des coordonnées pris dans la sélection du dessin (sinon : parcelle détectée). */
+  tableRows?: TableRow[] | null
+  /** La sélection était une parcelle fermée : sa surface est celle du plan. */
+  tableIsParcel?: boolean
+  /** Fond du plan de situation. */
+  situationProvider?: SituationProvider
+}
+
+/** Accès à l'éditeur, fourni par l'application (sélection en cours). */
+export const docHooks: { selection: () => Selection[] } = { selection: () => [] }
+
+/** Clé Google Maps : saisie par l'utilisateur, sinon variable de déploiement. */
+export function googleKey(): string {
+  try {
+    const k = localStorage.getItem('appstock.googleKey')
+    if (k) return k
+  } catch {
+    /* stockage indisponible */
+  }
+  return (import.meta.env?.VITE_GOOGLE_MAPS_KEY as string | undefined) ?? ''
 }
 
 interface DocType {
@@ -161,6 +184,10 @@ export function defaultDoc(project: Project): DocSettings {
     showArea: true,
     monochrome: false,
     unit: 1,
+    showSituation: true,
+    situationScale: 10000,
+    situationProvider: 'osm',
+    tableRows: null,
   }
 }
 
@@ -224,12 +251,172 @@ export function inferParcel(project: Project): Parcel | null {
   return computeParcel(vertices)
 }
 
-export function sheetContent(project: Project): SheetContent | null {
+export function sheetContent(project: Project, doc?: DocSettings, onSituation?: () => void): SheetContent | null {
   const extent = project.extent()
   if (!extent) return null
   const items = project.items.filter((i) => i.ds.visible)
   const plan = items.find((i) => i.plan)?.plan
-  return { layers: items.map((i) => ({ dl: i.dl, visible: i.vis })), extent, parcel: plan?.parcel ?? inferParcel(project), legend: plan?.legend ?? [] }
+  const rows = doc?.tableRows?.length ? doc.tableRows : null
+  const parcel = rows && doc?.tableIsParcel ? computeParcel(rows) : (plan?.parcel ?? inferParcel(project))
+  const content: SheetContent = { layers: items.map((i) => ({ dl: i.dl, visible: i.vis })), extent, parcel, legend: plan?.legend ?? [], table: rows }
+  if (doc && doc.showSituation !== false && doc.template !== 'aucun') {
+    const req = situationRequest(project, doc, content)
+    if (typeof req === 'string') content.situation = req
+    else {
+      const r = situationReady(req, onSituation)
+      content.situation = r === undefined ? 'Chargement de la carte…' : r instanceof Error ? 'Carte indisponible : ' + r.message : r
+    }
+  }
+  return content
+}
+
+/** Demande de plan de situation : centre et contour du terrain en longitude, latitude. */
+export function situationRequest(project: Project, doc: DocSettings, content: SheetContent): SituationRequest | string {
+  if (!project.crs) return 'Système de coordonnées inconnu : choisissez-le (Outils › Système)'
+  const pts = content.table?.length ? content.table : content.parcel?.vertices
+  let cx: number
+  let cy: number
+  if (pts?.length) {
+    cx = pts.reduce((a, p) => a + p.x, 0) / pts.length
+    cy = pts.reduce((a, p) => a + p.y, 0) / pts.length
+  } else if (doc.center) [cx, cy] = doc.center
+  else {
+    cx = (content.extent[0] + content.extent[2]) / 2
+    cy = (content.extent[1] + content.extent[3]) / 2
+  }
+  const ll = toLonLat(project.crs, cx, cy)
+  if (!ll) return 'Position géographique impossible à calculer'
+  const ring = pts && pts.length >= 3 ? (pts.map((p) => toLonLat(project.crs, p.x, p.y)).filter(Boolean) as [number, number][]) : null
+  const g = sheetGeometry(doc, content.extent)
+  const { image } = situationRect(g)
+  const provider = doc.situationProvider ?? 'osm'
+  return { lon: ll[0], lat: ll[1], ring, widthMm: image.w, heightMm: image.h, scale: doc.situationScale ?? 10000, provider, googleKey: provider === 'google' ? googleKey() : undefined }
+}
+
+/** Attend le plan de situation (avant un PDF). */
+export async function ensureSituation(project: Project, doc: DocSettings): Promise<SituationMap | null> {
+  const content = sheetContent(project, doc)
+  if (!content || doc.showSituation === false || doc.template === 'aucun') return null
+  const req = situationRequest(project, doc, content)
+  if (typeof req === 'string') return null
+  try {
+    return await situationMap(req)
+  } catch {
+    return null
+  }
+}
+
+/** Remplit le tableau des coordonnées avec la sélection du dessin ; renvoie le nombre de points. */
+export function useSelectionForTable(project: Project, doc: DocSettings, sel: Selection[] = docHooks.selection()): number {
+  if (!sel.length) return 0
+  const { rows, parcel } = pointsFromSelection(project, sel)
+  if (!rows.length) return 0
+  doc.tableRows = rows
+  doc.tableIsParcel = parcel
+  return rows.length
+}
+
+/** Réglages communs (assistant et mise en page) : tableau des coordonnées. */
+export function tableSection(project: Project, doc: DocSettings, refresh: () => void): HTMLElement {
+  const box = h('div', { class: 'note' })
+  const draw = () => {
+    const n = doc.tableRows?.length ?? 0
+    const selCount = docHooks.selection().length
+    box.replaceChildren(
+      h('b', null, 'Tableau des coordonnées : '),
+      n ? `${n} point(s) pris dans la sélection du dessin${doc.tableIsParcel ? ' (parcelle fermée : sa surface est reportée)' : ''}.` : 'sommets de la parcelle détectée automatiquement (la plus grande surface fermée).',
+      h('br'),
+      h('button', {
+        class: 'link',
+        disabled: !selCount,
+        title: selCount ? '' : 'Sélectionnez d’abord les bornes, les points ou la parcelle dans le dessin',
+        onclick: () => {
+          useSelectionForTable(project, doc)
+          draw()
+          refresh()
+        },
+      }, selCount ? `Prendre la sélection du dessin (${selCount} objet(s))` : 'Sélectionnez d’abord les bornes ou la parcelle dans le dessin'),
+      n ? ' · ' : '',
+      n
+        ? h('button', {
+            class: 'link',
+            onclick: () => {
+              doc.tableRows = null
+              doc.tableIsParcel = false
+              draw()
+              refresh()
+            },
+          }, 'Revenir à la parcelle détectée')
+        : '',
+    )
+  }
+  draw()
+  return box
+}
+
+/** Réglages communs : encart du plan de situation. */
+export function situationSection(doc: DocSettings, refresh: () => void): HTMLElement {
+  const key = h('input', { type: 'password', placeholder: 'Clé API Google Maps (Maps Static)', value: googleKey(), autocomplete: 'off' }) as HTMLInputElement
+  key.addEventListener('change', () => {
+    try {
+      localStorage.setItem('appstock.googleKey', key.value.trim())
+    } catch {
+      /* stockage indisponible */
+    }
+    retrySituations()
+    refresh()
+  })
+  const provider = doc.situationProvider ?? 'osm'
+  return h(
+    'div',
+    null,
+    h(
+      'div',
+      { class: 'row situation-row' },
+      checkbox('Plan de situation', doc.showSituation !== false, (v) => {
+        doc.showSituation = v
+        refresh()
+      }),
+      field('Échelle du plan de situation', select([2000, 5000, 10000, 20000, 25000, 50000, 100000].map((s) => [String(s), '1/' + s.toLocaleString('fr-FR')]), String(doc.situationScale ?? 10000), (v) => {
+        doc.situationScale = Number(v)
+        refresh()
+      })),
+      field('Fond de carte', select([['osm', 'OpenStreetMap (sans clé)'], ['google', 'Google Maps (clé API)']], provider, (v) => {
+        doc.situationProvider = v as SituationProvider
+        refresh()
+      })),
+    ),
+    provider === 'google'
+      ? h('div', null, field('Clé Google Maps', key, 'Créée dans la console Google Cloud (API « Maps Static »), limitée à l’adresse de la plateforme. Gardée sur cet appareil uniquement.'))
+      : h('p', { class: 'muted' }, 'Carte générée automatiquement autour du terrain, contour en rouge. Google Maps est disponible avec une clé API.'),
+    h('button', {
+      class: 'link',
+      onclick: () => {
+        retrySituations()
+        refresh()
+      },
+    }, 'Actualiser la carte'),
+  )
+}
+
+/** Exemple de renseignements, à modifier : un plan de bornage à Yaoundé. */
+export function fillExample(doc: DocSettings): void {
+  doc.type = 'bornage'
+  doc.template = 'cameroun'
+  Object.assign(doc.info, {
+    ville: 'YAOUNDE',
+    region: 'Centre',
+    departement: 'Mfoundi',
+    arrondissement: 'Yaoundé IVe',
+    lieuDit: 'Mimboman',
+    enteteGauche: 'ORDRE NATIONAL DES GEOMETRES\nDU CAMEROUN\nCabinet EXEMPLE - Géomètre Expert\nAgrément n° 000/EXEMPLE',
+    geometre: 'Cabinet EXEMPLE, Géomètre Expert',
+    mentions: 'Coordonnées rattachées au réseau géodésique national',
+  })
+  Object.assign(doc.meta, { tf: '0000/MFOUNDI', demandeur: 'M. EXEMPLE Paul', proprietaire: 'Mme EXEMPLE Marie', bloc: '1', lots: '6 et 7' })
+  doc.showSituation = true
+  doc.showNorth = true
+  doc.showTable = true
 }
 
 const META_LABELS: Record<keyof DocMeta, string> = {
@@ -246,15 +433,25 @@ export function openDocumentWizard(project: Project, doc: DocSettings, onApply: 
   const draft: DocSettings = structuredClone(doc)
   if (!draft.info.systeme && project.crs) draft.info.systeme = 'Projection ' + crsLabel(project.crs).replace(/^WGS 84 \/ /, '')
   if (draft.type === 'libre' && !doc.showFrame) draft.type = project.items.some((i) => i.plan?.parcel) ? 'bornage' : 'topo'
-  const content = sheetContent(project)
+  // Une sélection faite avant d'ouvrir l'assistant remplit le tableau des coordonnées.
+  const fromSel = !draft.tableRows?.length ? useSelectionForTable(project, draft) : 0
   const body = h('div', { class: 'content' })
   const close = modal('Nouveau plan — que souhaitez-vous produire ?', body, { wide: true })
   const canvas = h('canvas')
   const fitBox = h('div', { class: 'note' })
   const form = h('div')
 
+  let pending = false
   const redraw = () => {
     applyType(draft)
+    const content = sheetContent(project, draft, () => {
+      if (pending) return
+      pending = true
+      requestAnimationFrame(() => {
+        pending = false
+        redraw()
+      })
+    })
     const [w, hh] = paperSize(draft)
     const px = Math.max(1.2, Math.min(3.2, 1100 / Math.max(w, hh)))
     canvas.width = Math.round(w * px)
@@ -321,6 +518,14 @@ export function openDocumentWizard(project: Project, doc: DocSettings, onApply: 
     const info = (k: keyof SheetInfo, label: string, rows = 0) => field(label, input(draft.info[k], (v) => (draft.info[k] = v), rows))
     form.replaceChildren(
       intro ? h('div', { class: 'note' }, intro) : '',
+      fromSel ? h('div', { class: 'note ok' }, `Tableau des coordonnées rempli avec votre sélection (${fromSel} point(s)).`) : '',
+      h('div', { class: 'actions' }, h('button', {
+        onclick: () => {
+          fillExample(draft)
+          build()
+          redraw()
+        },
+      }, 'Remplir avec un exemple (à modifier)')),
       h('h3', null, '1 · Type de document'),
       cards,
       draft.type === 'libre'
@@ -339,13 +544,19 @@ export function openDocumentWizard(project: Project, doc: DocSettings, onApply: 
             ),
             h('h3', null, '3 · Renseignements'),
             h('div', { class: 'row' }, ...meta),
-            h('div', { class: 'row' }, info('ville', 'Ville (en-tête)'), info('region', 'Région'), info('departement', 'Département')),
-            h('div', { class: 'row' }, info('arrondissement', 'Arrondissement'), info('lieuDit', 'Lieu-dit'), info('geometre', 'Géomètre / cabinet')),
+            territoryFields(draft.info, redraw),
+            h('div', { class: 'row' }, info('ville', 'Ville (en-tête)'), info('lieuDit', 'Lieu-dit / quartier'), info('geometre', 'Géomètre / cabinet')),
             h('div', { class: 'row' }, info('systeme', 'Système de coordonnées (mention)', 2), info('mentions', 'Autres mentions (bas de page)', 2)),
             draft.template === 'cameroun' ? h('div', { class: 'row' }, info('enteteGauche', 'En-tête gauche (ministère, ordre, cabinet, agrément)', 3)) : '',
             h('h3', null, '4 · Titre (rédigé automatiquement, modifiable ensuite dans la mise en page)'),
             h('pre', { class: 'title-preview' }, (type.title(draft.meta) + '\n' + type.beneficiaire(draft.meta)).trim()),
-            h('div', { class: 'row' }, checkbox('Tableau des coordonnées', draft.showTable, (v) => set({ showTable: v })), checkbox('Légende', draft.showLegend, (v) => set({ showLegend: v })), checkbox('Superficie', draft.showArea, (v) => set({ showArea: v })), checkbox('Croisillons', draft.showGrid, (v) => set({ showGrid: v }))),
+            h('div', { class: 'row' }, checkbox('Tableau des coordonnées', draft.showTable, (v) => set({ showTable: v })), checkbox('Légende', draft.showLegend, (v) => set({ showLegend: v })), checkbox('Superficie', draft.showArea, (v) => set({ showArea: v })), checkbox('Croisillons', draft.showGrid, (v) => set({ showGrid: v })), checkbox('Nord', draft.showNorth, (v) => set({ showNorth: v }))),
+            tableSection(project, draft, redraw),
+            h('h3', null, '5 · Plan de situation'),
+            situationSection(draft, () => {
+              build()
+              redraw()
+            }),
           ),
     )
   }

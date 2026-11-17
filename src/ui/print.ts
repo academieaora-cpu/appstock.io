@@ -9,7 +9,8 @@ import { CanvasPainter } from '../render/painter'
 import { PdfPainter, createPdf } from '../render/pdf'
 import { PAPERS, SCALES, drawSheet, fitInfo, paperSize, type SheetContent, type SheetInfo, type SheetSpec, type TemplateName } from '../topo/sheet'
 import { checkbox, field, h, modal, select, toast } from './dom'
-import { sheetContent, type DocSettings } from './document'
+import { docHooks, ensureSituation, sheetContent, situationSection, tableSection, useSelectionForTable, type DocSettings } from './document'
+import { territoryFields } from './territoire'
 
 export function renderPdf(spec: SheetSpec, c: SheetContent, title: string): Blob {
   const [w, hgt] = paperSize(spec)
@@ -19,8 +20,8 @@ export function renderPdf(spec: SheetSpec, c: SheetContent, title: string): Blob
 }
 
 export function openPrintDialog(project: Project, viewExtent: Extent, doc: DocSettings, onChange: () => void): void {
-  const base = sheetContent(project)
-  if (!base) {
+  const base0 = sheetContent(project)
+  if (!base0) {
     toast('Ouvrez un fichier ou dessinez avant d’imprimer.', 'erreur')
     return
   }
@@ -29,10 +30,23 @@ export function openPrintDialog(project: Project, viewExtent: Extent, doc: DocSe
   const info = doc.info
   const name = (project.items.find((i) => i.plan) ?? project.items[0]).ds.name.replace(/\.[^.]+$/, '')
 
-  const spec = (): SheetSpec => ({
+  const spec = (): DocSettings => ({
     ...doc,
     center: frameMode === 'cadre' ? doc.center : frameMode === 'vue' ? [(viewExtent[0] + viewExtent[2]) / 2, (viewExtent[1] + viewExtent[3]) / 2] : null,
   })
+  // Une sélection faite avant d'ouvrir la mise en page remplit le tableau des coordonnées.
+  const fromSel = !doc.tableRows?.length && docHooks.selection().length ? useSelectionForTable(project, doc) : 0
+  if (fromSel) toast(`Tableau des coordonnées rempli avec la sélection (${fromSel} point(s)).`, 'ok')
+  let pending = false
+  const contentFor = (s: DocSettings): SheetContent =>
+    sheetContent(project, s, () => {
+      if (pending) return
+      pending = true
+      requestAnimationFrame(() => {
+        pending = false
+        redraw()
+      })
+    }) ?? base0
 
   const canvas = h('canvas')
   const fitNote = h('div', { class: 'note' })
@@ -46,6 +60,7 @@ export function openPrintDialog(project: Project, viewExtent: Extent, doc: DocSe
     ctx.setTransform(px, 0, 0, px, 0, 0)
     ctx.fillStyle = '#fff'
     ctx.fillRect(0, 0, w, hgt)
+    const base = contentFor(s)
     drawSheet(new CanvasPainter(ctx, 'Helvetica, Arial, sans-serif'), s, base)
     const fit = fitInfo(s, frameMode === 'vue' ? viewExtent : base.extent)
     fitNote.className = 'note ' + (fit.fits || frameMode !== 'tout' ? 'ok' : 'warn')
@@ -113,12 +128,25 @@ export function openPrintDialog(project: Project, viewExtent: Extent, doc: DocSe
             null,
             h('div', { class: 'row' }, checkbox('Croisillons', doc.showGrid, (v) => set({ showGrid: v })), checkbox('Nord', doc.showNorth, (v) => set({ showNorth: v })), checkbox('Légende', doc.showLegend, (v) => set({ showLegend: v }))),
             h('div', { class: 'row' }, checkbox('Tableau des coordonnées', doc.showTable, (v) => set({ showTable: v })), checkbox('Superficie', doc.showArea, (v) => set({ showArea: v })), checkbox('Noir et blanc', doc.monochrome, (v) => set({ monochrome: v }))),
+            tableSection(project, doc, () => {
+              redraw()
+              onChange()
+            }),
+            h('h3', null, 'Plan de situation'),
+            situationSection(doc, () => {
+              rebuildForm()
+              redraw()
+              onChange()
+            }),
             h('h3', null, 'Renseignements du plan'),
             text('titre', 'Titre du plan', 3),
             text('beneficiaire', 'Bénéficiaire / client (en gras)'),
             h('div', { class: 'row' }, text('ville', 'Ville (en-tête)'), text('date', 'Date')),
-            h('div', { class: 'row' }, text('region', 'Région'), text('departement', 'Département')),
-            h('div', { class: 'row' }, text('arrondissement', 'Arrondissement'), text('lieuDit', 'Lieu-dit')),
+            territoryFields(info, () => {
+              redraw()
+              onChange()
+            }),
+            h('div', { class: 'row' }, text('lieuDit', 'Lieu-dit / quartier')),
             h('div', { class: 'row' }, text('geometre', 'Géomètre / cabinet'), text('reference', 'Référence (T.F., bloc, lots)')),
             text('systeme', 'Système de coordonnées (mention)', 2),
             text('mentions', 'Autres mentions (bas de page)', 2),
@@ -128,8 +156,9 @@ export function openPrintDialog(project: Project, viewExtent: Extent, doc: DocSe
   }
   rebuildForm()
 
-  const exportOne = (s: SheetSpec) => {
-    const blob = renderPdf(s, base, name)
+  const exportOne = async (s: DocSettings) => {
+    await ensureSituation(project, s)
+    const blob = renderPdf(s, contentFor(s), name)
     download({ name: `${name}_${s.paper}_1-${s.scale}.pdf`, mime: 'application/pdf', data: blob })
   }
   const multi = h('div', { class: 'row' })
@@ -147,7 +176,7 @@ export function openPrintDialog(project: Project, viewExtent: Extent, doc: DocSe
         null,
         form,
         fitNote,
-        h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => exportOne(spec()) }, 'Télécharger le PDF')),
+        h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => void exportOne(spec()) }, 'Télécharger le PDF')),
         h('h3', null, 'Plusieurs formats d’un coup'),
         multi,
         h(
@@ -156,13 +185,13 @@ export function openPrintDialog(project: Project, viewExtent: Extent, doc: DocSe
           h(
             'button',
             {
-              onclick: () => {
+              onclick: async () => {
                 const done: string[] = []
                 for (const p of chosen) {
                   const s = { ...spec(), paper: p }
-                  const fit = fitInfo(s, frameMode === 'vue' ? viewExtent : base.extent)
+                  const fit = fitInfo(s, frameMode === 'vue' ? viewExtent : base0.extent)
                   if (!fit.fits && fit.bestScale && frameMode === 'tout') s.scale = fit.bestScale
-                  exportOne(s)
+                  await exportOne(s)
                   done.push(`${p} au 1/${s.scale}`)
                 }
                 if (done.length) toast('PDF générés : ' + done.join(', '), 'ok')

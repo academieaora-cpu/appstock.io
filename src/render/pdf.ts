@@ -14,6 +14,13 @@ export class PdfPainter implements Painter {
     doc.setLineJoin('round')
   }
 
+  image(src: HTMLCanvasElement, x: number, y: number, w: number, h: number): void {
+    try {
+      this.doc.addImage(src.toDataURL('image/jpeg', 0.9), 'JPEG', x, y, w, h)
+    } catch {
+      // Image d'une source sans autorisation de réutilisation : elle n'est pas intégrée au PDF.
+    }
+  }
   beginStroke(color: RGB, width: number, dash?: number[]): void {
     this.doc.setDrawColor(color[0], color[1], color[2])
     this.doc.setLineWidth(width)

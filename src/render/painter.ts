@@ -28,6 +28,8 @@ export interface Painter {
   save(): void
   clipRect(x: number, y: number, w: number, h: number): void
   restore(): void
+  /** Image raster (plan de situation, fond de carte), dans l'unité de la cible. */
+  image?(src: HTMLCanvasElement, x: number, y: number, w: number, h: number): void
 }
 
 /** Transformation monde → cible : le point monde (cx, cy) est placé en (ox, oy). */
@@ -193,6 +195,9 @@ export class CanvasPainter implements Painter {
     private font = 'Arial, Helvetica, sans-serif',
   ) {}
 
+  image(src: HTMLCanvasElement, x: number, y: number, w: number, h: number): void {
+    this.ctx.drawImage(src, x, y, w, h)
+  }
   beginStroke(color: RGB, width: number, dash?: number[]): void {
     const c = this.ctx
     c.beginPath()

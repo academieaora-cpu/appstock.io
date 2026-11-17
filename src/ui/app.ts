@@ -20,7 +20,7 @@ import { MapView } from '../render/mapview'
 import { formatArea } from '../topo/sheet'
 import { authGate, openAccountDialog, openAdminPanel, type Session } from './account'
 import { openAssistant, type AssistantResult } from './assistant'
-import { defaultDoc, frameOutline, frameOverlay, openDocumentWizard, type DocSettings } from './document'
+import { defaultDoc, docHooks, frameOutline, frameOverlay, openDocumentWizard, type DocSettings } from './document'
 import { clear, field, h, modal, select, toast } from './dom'
 import { icon } from './icons'
 import { MENU_ORDER, renderManual } from './manual'
@@ -241,6 +241,7 @@ export function startApp(root: HTMLElement): void {
   ]
   ed.register([...GEOMETRY_COMMANDS, ...ADVANCED_COMMANDS, ...UI_COMMANDS])
   ed.actions.notify = (m?: string) => m && toast(m, 'ok', 9000)
+  docHooks.selection = () => ed.selection
   ed.actions.downloadText = (arg?: string) => {
     if (!arg) return
     const { name, content } = JSON.parse(arg) as { name: string; content: string }

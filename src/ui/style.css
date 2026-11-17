@@ -214,3 +214,6 @@ dialog.modal > .content { padding: 12px 16px 16px; overflow-y: auto; max-height:
 }
 
 .script-area { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; min-height: 220px; }
+.combo { display: flex; flex-direction: column; gap: 4px; }
+.combo select, .combo input { width: 100%; }
+.situation-row { align-items: center; }

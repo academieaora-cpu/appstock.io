@@ -30,6 +30,7 @@ import {
   type Pt,
 } from './ops'
 import { selectionGeometry, toProjectFn, type Selection } from './query'
+import { canProvidePoints, pointsFromSelection } from './selpoints'
 
 const BYLAYER: Color = -1
 const cur = (ed: Editor) => ({ layer: ed.currentLayer, color: BYLAYER })
@@ -879,17 +880,18 @@ export const GEOMETRY_COMMANDS: CommandDef[] = [
     menu: 'Topo 2D',
     ribbon: ['Topographie', 'Habillage'],
     icon: 'table',
-    tip: 'Dessine le tableau des coordonnées des sommets d’une parcelle (Borne, X, Y).',
-    steps: ['Cliquez la parcelle.', 'Validez le préfixe et le premier numéro (les mêmes que la numérotation).', 'Cliquez l’emplacement du coin supérieur gauche du tableau.'],
+    tip: 'Dessine le tableau des coordonnées (Borne, X, Y) des objets désignés : parcelle, bornes, points topographiques.',
+    steps: ['Désignez la parcelle, ou les bornes et points un à un (ou par fenêtre), puis Entrée. Une sélection faite avant la commande est reprise.', 'Validez le préfixe et le premier numéro des sommets sans nom (les points topo gardent leur matricule).', 'Cliquez l’emplacement du coin supérieur gauche du tableau.'],
     async run(ed) {
-      const [s] = await ed.select('Sélectionnez la parcelle', { single: true, filter: (x) => !!vertices(ed.entity(x)) })
-      const v = vertices(ed.entity(s))
-      if (!v) return
-      const prefix = await ed.optionalText('Préfixe', 'B.')
-      const start = Math.round(await ed.number('Premier numéro', 1))
+      const sel = await ed.select('Sélectionnez la parcelle ou les points', { editable: false, filter: (x) => canProvidePoints(ed.entity(x)) })
+      const unnamed = sel.some((x) => ed.entity(x).t !== 'insert')
+      const prefix = unnamed ? await ed.optionalText('Préfixe des sommets sans nom', 'B.') : 'B.'
+      const start = unnamed ? Math.round(await ed.number('Premier numéro', 1)) : 1
+      const { rows } = pointsFromSelection(ed.project, sel, prefix, start)
+      if (!rows.length) throw new Error('Aucun point dans la sélection.')
       const k = ed.k
-      const n = v.pts.length / 2
-      const widths = [12 * k, 26 * k, 26 * k]
+      const n = rows.length
+      const widths = [14 * k, 26 * k, 26 * k]
       const W = widths[0] + widths[1] + widths[2]
       const rowH = 5 * k
       const H = rowH * (n + 2)
@@ -904,13 +906,14 @@ export const GEOMETRY_COMMANDS: CommandDef[] = [
       txt(x0 + widths[0] / 2, y0 - rowH * 1.5, 'Borne', 1)
       txt(x0 + widths[0] + widths[1] / 2, y0 - rowH * 1.5, 'X', 1)
       txt(x0 + W - widths[2] / 2, y0 - rowH * 1.5, 'Y', 1)
-      for (let i = 0; i < n; i++) {
+      rows.forEach((p, i) => {
         const y = y0 - rowH * (i + 2.5)
-        txt(x0 + widths[0] / 2, y, prefix + (start + i), 1)
-        txt(x0 + widths[0] + widths[1] - 1.2 * k, y, v.pts[i * 2].toFixed(3), 2)
-        txt(x0 + W - 1.2 * k, y, v.pts[i * 2 + 1].toFixed(3), 2)
-      }
+        txt(x0 + widths[0] / 2, y, p.label, 1)
+        txt(x0 + widths[0] + widths[1] - 1.2 * k, y, p.x.toFixed(3), 2)
+        txt(x0 + W - 1.2 * k, y, p.y.toFixed(3), 2)
+      })
       ed.add('Tableau des coordonnées', ents, { layers: [['TABLEAUX', FOREGROUND]] })
+      ed.message(`Tableau de ${n} point(s) dessiné.`)
     },
   },
   {
