@@ -8,6 +8,7 @@ import { crsLabel, detectCrs, getCrs, searchCrs, toLonLat, type CrsDef } from '.
 import { colorToCss, polylineLength, rawExtent } from '../core/geom'
 import { Project, type Item } from '../core/project'
 import { FOREGROUND, ensureLayer, type Color, type Entity } from '../core/types'
+import { ADVANCED_COMMANDS } from '../edit/advanced'
 import { GEOMETRY_COMMANDS } from '../edit/commands'
 import { Editor, type CommandDef } from '../edit/editor'
 import { closedRing, ringAreaAbs, vertices } from '../edit/ops'
@@ -232,13 +233,19 @@ export function startApp(root: HTMLElement): void {
       view.fit([Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])])
     } }),
     ui({ id: 'SCR', label: 'Système de coordonnées du projet…', aliases: ['CRS', 'PROJECTION'], menu: 'Outils', ribbon: ['Affichage', 'Carte'], icon: 'crs', tip: 'Choisit le système de coordonnées commun ; tous les fichiers y sont reprojetés à l’affichage.', run: () => openCrs(null) }),
+    ui({ id: 'SCRIPT', label: 'Exécuter un script…', aliases: ['SCRIPTS', 'SCR2', 'MACRO'], menu: 'Outils', ribbon: ['Projets', 'Automatisation'], icon: 'script', tip: 'Enchaîne des saisies de la ligne de commande écrites à l’avance (une par ligne, comme un fichier .scr d’AutoCAD) : dessiner, coter ou habiller automatiquement.', steps: ['Collez ou chargez le script (fichier .scr ou .txt).', 'Une ligne = une saisie : nom de commande, coordonnées, valeur ou option ; ligne vide = Entrée ; « ; » = commentaire.', 'Cliquez Exécuter : chaque saisie apparaît dans la ligne de commande ; Ctrl+Z annule ensuite chaque objet créé.'], run: () => openScript() }),
     ui({ id: 'EXTENSIONS', label: 'Extensions et capacités…', aliases: ['EXT'], menu: 'Outils', icon: 'layers', tip: 'Registre des formats et fonctions intégrés et prévus.', run: () => openExtensions() }),
     ui({ id: 'COMPTE', label: 'Mon compte…', aliases: ['ACCOUNT'], menu: 'Outils', icon: 'user', tip: 'Profil, mot de passe, code administrateur, déconnexion.', run: () => openAccount() }),
     ui({ id: 'ADMIN', label: 'Administration (utilisateurs)…', aliases: ['ADMINISTRATION'], menu: 'Outils', icon: 'user', tip: 'Réservé aux administrateurs : comptes, activité, projets.', run: () => (session.role === 'admin' ? openAdminPanel() : toast('Réservé aux administrateurs.', 'erreur')) }),
     ui({ id: 'AIDE', label: 'Manuel d’utilisation', aliases: ['HELP', '?'], menu: 'Aide', ribbon: ['Affichage', 'Panneaux'], icon: 'help', tip: 'Affiche ce manuel dans le panneau de droite (F1).', run: () => showManual() }),
   ]
-  ed.register([...GEOMETRY_COMMANDS, ...UI_COMMANDS])
+  ed.register([...GEOMETRY_COMMANDS, ...ADVANCED_COMMANDS, ...UI_COMMANDS])
   ed.actions.notify = (m?: string) => m && toast(m, 'ok', 9000)
+  ed.actions.downloadText = (arg?: string) => {
+    if (!arg) return
+    const { name, content } = JSON.parse(arg) as { name: string; content: string }
+    download({ name, mime: 'text/csv;charset=utf-8', data: '\ufeff' + content })
+  }
 
   // --- Barre de menus --------------------------------------------------------------------------
   let openMenu: HTMLElement | null = null
@@ -294,10 +301,11 @@ export function startApp(root: HTMLElement): void {
   }
 
   // --- Ruban ------------------------------------------------------------------------------------
-  const RIBBON_TABS = ['Début', 'Topographie', 'Mise en page', 'Affichage']
+  const RIBBON_TABS = ['Début', 'Topographie', 'Projets', 'Mise en page', 'Affichage']
   const GROUPS: Record<string, string[]> = {
     Début: ['Dessin', 'Modification', 'Annotation', 'Calques'],
     Topographie: ['Points', 'Calculs', 'Habillage', 'Terrain'],
+    Projets: ['Terrain', 'Volumes', 'Parcelles', 'Automatisation'],
     'Mise en page': ['Plan', 'Impression', 'Fichier'],
     Affichage: ['Navigation', 'Carte', 'Panneaux'],
   }
@@ -815,6 +823,49 @@ export function startApp(root: HTMLElement): void {
       notes.append(h('div', { class: 'note ok' }, `${r.name} téléchargé.`), ...r.notes.map((n) => h('div', { class: 'note' }, n)))
     } }, 'Exporter')))
     modal('Exporter', body)
+  }
+
+  function openScript(): void {
+    const example = [
+      '; Exemple : un rectangle de 20 × 12 m, sa surface et une cote',
+      'REC',
+      '783640,427200',
+      '@20,12',
+      'ES',
+      'D',
+      '',
+      'COT',
+      '783640,427200',
+      '783660,427200',
+      '783650,427196',
+    ].join('\n')
+    const area = h('textarea', { class: 'script-area', rows: 14, spellcheck: false, placeholder: example }) as HTMLTextAreaElement
+    try {
+      area.value = localStorage.getItem('appstock.script') ?? ''
+    } catch {
+      /* stockage indisponible */
+    }
+    const file = h('input', { type: 'file', accept: '.scr,.txt', onchange: async () => {
+      const f = file.files?.[0]
+      if (f) area.value = await f.text()
+    } }) as HTMLInputElement
+    let close = () => {}
+    const run = h('button', { class: 'primary', onclick: async () => {
+      const text = area.value.trim() ? area.value : example
+      try {
+        localStorage.setItem('appstock.script', area.value)
+      } catch {
+        /* stockage indisponible */
+      }
+      close()
+      const n = await ed.runScript(text)
+      toast(`Script exécuté : ${n} saisie(s) envoyée(s).`, 'ok')
+    } }, 'Exécuter')
+    close = modal('Exécuter un script', h('div', { class: 'content' },
+      h('p', { class: 'muted' }, 'Une ligne par saisie, exactement comme au clavier : nom ou raccourci de commande, coordonnées (x,y · @dx,dy · @d<angle · @d<Gg), valeurs, options (lettre majuscule). Ligne vide = Entrée. À « Choix des objets », tapez T (tout) ou D (dernier objet). Les lignes qui commencent par « ; » sont ignorées.'),
+      area,
+      h('div', { class: 'row' }, file, h('button', { onclick: () => (area.value = example) }, 'Insérer l’exemple'), run),
+    ), { wide: true })
   }
 
   function openExtensions(): void {

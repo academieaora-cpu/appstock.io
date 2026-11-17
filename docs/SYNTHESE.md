@@ -2,6 +2,10 @@
 
 *État au 17 novembre 2026. Ce document résume l'analyse, ce que le prototype prouve, ses limites et la suite proposée. Les rapports détaillés des experts sont dans [`docs/experts/`](experts/).*
 
+## 0 bis. Mise à jour du 17 novembre 2026 (après-midi) : dépôts et documentation analysés
+
+Les trois dépôts (OCCT, JellyCAD, Autodesk Machine Control Framework) et les manuels Covadis, AutoPiste et AutoCAD fournis ont été analysés : voir `docs/analyses/09-depots-et-documentation.md`. En bref : OCCT servira plus tard de noyau 3D chargé à la demande (solides, STEP, IGES) ; de JellyCAD on reprend l'idée du dessin programmable (commande « Exécuter un script ») ; du cadre de pilotage de machines, le modèle pilote + simulateur pour les instruments de terrain. Nouvelles commandes : Ajuster, Prolonger, Raccord, Talus, Carroyage, Implantation, Division de parcelle, Transformation 2D → 3D, Informations MNT, et un menu Projets avec Profil en long, Profils en travers et Cubatures.
+
 ## 0. Mise à jour du 17 novembre 2026 : l'environnement de dessin
 
 Suite à votre retour (« trop d'impression, pas assez d'environnement de dessin »), la plateforme a été réorganisée autour du dessin :

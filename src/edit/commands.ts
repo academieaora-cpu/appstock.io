@@ -64,7 +64,7 @@ function transformedGhost(sel: Selection[], m: (cur: Pt) => [number, number, num
   }
 }
 
-function circlePts(cx: number, cy: number, r: number, n = 72, a0 = 0, sweep = Math.PI * 2): number[] {
+export function circlePts(cx: number, cy: number, r: number, n = 72, a0 = 0, sweep = Math.PI * 2): number[] {
   const out: number[] = []
   for (let i = 0; i <= n; i++) {
     const a = a0 + (sweep * i) / n
@@ -210,7 +210,7 @@ function addTcpoints(ed: Editor, label: string, ents: Entity[]): void {
 }
 
 /** Points cotés visibles (points, blocs à altitude, sommets de polylignes 3D), en coordonnées du projet. */
-function points3d(ed: Editor): { x: number; y: number; z: number }[] {
+export function points3d(ed: Editor): { x: number; y: number; z: number }[] {
   const out: { x: number; y: number; z: number }[] = []
   for (const item of ed.project.items) {
     if (!item.ds.visible) continue

@@ -6,7 +6,7 @@
 import type { CommandDef, Editor } from '../edit/editor'
 import { h } from './dom'
 
-export const MENU_ORDER = ['Fichier', 'Édition', 'Affichage', 'Dessin', 'Cotation', 'Modification', 'Topo Calculs', 'Topo 2D', 'Topo 3D', 'Édition plan', 'Outils', 'Aide']
+export const MENU_ORDER = ['Fichier', 'Édition', 'Affichage', 'Dessin', 'Cotation', 'Modification', 'Topo Calculs', 'Topo 2D', 'Topo 3D', 'Projets', 'Édition plan', 'Outils', 'Aide']
 
 interface Guide {
   id: string
@@ -60,6 +60,36 @@ const GUIDES: Guide[] = [
       ['Nouveau plan (Édition plan › Nouveau plan)', ['choisissez le type : croquis de terrain, plan de bornage, de morcellement, d’état des lieux, topographique, altimétrique, d’implantation, de situation ;', 'choisissez le format (A4 à A0), l’orientation et l’échelle ;', 'renseignez date, demandeur, propriétaire, T.F., lieu, géomètre : le titre est rédigé automatiquement selon le modèle.']],
       ['Caler le cadre', ['après validation, la feuille apparaît en pointillés dans le dessin (cadre orange = zone imprimée) ;', 'commande CADRE : cliquez le nouveau centre pour déplacer le cadre sur la partie à imprimer.']],
       ['Imprimer', ['Édition plan › Mise en page et PDF : aperçu en direct, tous les renseignements modifiables ;', 'le PDF est vectoriel et à l’échelle exacte : imprimez à 100 %, sans « ajuster à la page » ;', 'plusieurs formats d’un coup (A4 et A3 par exemple).']],
+    ],
+  },
+  {
+    id: 'modifier',
+    title: 'Retoucher un dessin : ajuster, prolonger, raccorder',
+    body: [
+      ['Ajuster (AJ)', ['Entrée tout de suite : tous les objets visibles servent d’arêtes de coupe ; ou désignez d’abord les arêtes puis Entrée ;', 'cliquez chaque morceau à supprimer : il disparaît jusqu’aux intersections qui l’encadrent ;', 'fonctionne sur lignes, polylignes (y compris leurs arcs), arcs et cercles ; un cercle coupé devient un arc.']],
+      ['Prolonger (PRO)', ['même principe : cliquez près de l’extrémité à allonger, elle rejoint la première limite rencontrée.']],
+      ['Raccord (RA)', ['rayon 0 : les deux lignes sont coupées ou prolongées jusqu’à leur intersection (angle vif, pratique pour fermer un angle de bâtiment) ;', 'rayon positif : un arc tangent remplace l’angle (bordure de trottoir, virage) ;', 'option P : arrondit tous les angles d’une polyligne.']],
+    ],
+  },
+  {
+    id: 'projets-terrain',
+    title: 'Projets : profils, cubatures, division de parcelle',
+    body: [
+      'Ces outils travaillent sur le modèle de terrain (MNT) construit à partir des points cotés visibles : points topographiques avec altitude, polylignes 3D. Rien n’est calculé hors de la zone couverte par les points : les parties hors MNT sont signalées, jamais inventées.',
+      ['Profil en long (PFL)', ['dessinez l’axe (polyligne) dans le sens de parcours, puis lancez la commande ;', 'pas 0 : la guitare montre les sommets de l’axe et chaque cassure du terrain ; pas 10 : un point tous les 10 m en plus des sommets ;', 'exagération verticale 10 : échelle des hauteurs dix fois celle des longueurs (V 1/50 pour un plan au 1/500).']],
+      ['Profils en travers (PFT)', ['l’axe est tabulé au pas demandé et à chaque sommet ;', 'chaque profil est vu dans le sens de l’axe, gauche à gauche, avec son trait repéré P1, P2… sur le plan.']],
+      ['Cubatures (CUB)', ['tapez l’altitude de la plateforme, puis T (tout le MNT) ou O (un contour fermé) ;', 'déblai = terrain au-dessus de la plateforme, remblai = au-dessous ; calcul exact facette par facette.']],
+      ['Division de parcelle (DIV)', ['surface exacte à détacher, par une ligne parallèle à une direction (P) ou pivotant autour d’une borne (O) ;', 'la parcelle d’origine est conservée ; les deux nouvelles parcelles et leurs surfaces sont dessinées sur DIVISION et SURFACES.']],
+      ['Autres outils', ['Talus (TAL) : hachures entre la crête et le pied ;', 'Carroyage (CAR) : quadrillage de coordonnées dans le dessin ;', 'Implantation (IMP) : gisements, distances et lectures depuis une station, tableau et carnet CSV ;', 'Transformation 2D → 3D (2D3D) : met des polylignes à l’altitude du terrain.']],
+    ],
+  },
+  {
+    id: 'scripts',
+    title: 'Automatiser avec un script',
+    body: [
+      'Outils › Exécuter un script enchaîne des saisies écrites à l’avance, une par ligne, exactement comme au clavier (le principe des fichiers .scr d’AutoCAD et des logiciels de CAO programmable).',
+      ['Écrire un script', ['une ligne = une saisie : nom ou raccourci de commande, coordonnées (783640,427200 · @20,0 · @25<150g), valeur ou option ;', 'ligne vide = Entrée (termine une polyligne, valide une valeur par défaut) ;', 'à « Choix des objets », T = tous les objets, D = le dernier objet dessiné ;', 'une ligne qui commence par « ; » est un commentaire.']],
+      'Chaque objet créé peut ensuite être annulé avec Ctrl+Z. Un script préparé ailleurs (tableur, collègue) doit être relu avant d’être exécuté : le géomètre reste responsable du plan.',
     ],
   },
   {

@@ -137,6 +137,8 @@ export class Editor {
   cursor: Pt | null = null
   snap: Snap | null = null
   lastPoint: Pt | null = null
+  /** Position du dernier clic de désignation d'objet (côté à ajuster, segment à raccorder…). */
+  lastPick: Pt | null = null
   ghost: Ghost | null = null
   lastCommand: string | null = null
   running: string | null = null
@@ -312,7 +314,7 @@ export class Editor {
    * Objets à traiter. Une sélection faite avant la commande est reprise telle quelle (comme
    * dans AutoCAD). `single` : un seul objet, désigné d'un clic.
    */
-  async select(prompt: string, opts: { single?: boolean; filter?: (s: Selection) => boolean; editable?: boolean } = {}): Promise<Selection[]> {
+  async select(prompt: string, opts: { single?: boolean; filter?: (s: Selection) => boolean; editable?: boolean; allowEmpty?: boolean } = {}): Promise<Selection[]> {
     const editable = opts.editable !== false
     const accept = (s: Selection) => (!editable || isEditable(this.project, s.item)) && (!opts.filter || opts.filter(s))
     if (!opts.single && this.selection.length) {
@@ -326,7 +328,7 @@ export class Editor {
       this.pending = { kind: 'select', prompt: prompt + (opts.single ? ' :' : ' (puis Entrée) :'), single: !!opts.single, filter: accept, resolve, reject }
       this.emit('prompt')
     })
-    if (!sel.length) throw new Cancelled()
+    if (!sel.length && !opts.allowEmpty) throw new Cancelled()
     return sel
   }
 
@@ -471,6 +473,7 @@ export class Editor {
       }
       if (p.single) {
         this.pending = null
+        this.lastPick = [raw[0], raw[1]]
         p.resolve([s])
         return
       }
@@ -560,7 +563,36 @@ export class Editor {
       return
     }
     if (p.kind === 'select') {
-      if (!text) this.onEnter()
+      if (!text) {
+        this.onEnter()
+        return
+      }
+      // Comme dans AutoCAD : « Tout » ou « Dernier » à l'invite de choix des objets.
+      const u = norm(text)
+      const item = this.activeItem && this.project.items.includes(this.activeItem) ? this.activeItem : this.project.items.find((i) => isEditable(this.project, i))
+      if (!item) return
+      const all: Selection[] = []
+      item.ds.entities.forEach((e, i) => {
+        if (item.ds.layers.get(e.layer)?.visible === false) return
+        const s: Selection = { item, entity: i }
+        if (!p.filter || p.filter(s)) all.push(s)
+      })
+      let found: Selection[] | null = null
+      if (u === 'T' || u === 'TOUT' || u === 'ALL') found = all
+      else if (u === 'D' || u === 'DERNIER' || u === 'L' || u === 'LAST') found = all.length ? [all[all.length - 1]] : []
+      if (!found) {
+        this.message('Désignez les objets à la souris, ou tapez T (tout) ou D (dernier objet).')
+        return
+      }
+      if (p.single) {
+        if (!found.length) return
+        this.pending = null
+        p.resolve([found[found.length - 1]])
+        return
+      }
+      this.pending = null
+      this.setSelection([])
+      p.resolve(found)
       return
     }
     const r = p.parse(text)
@@ -570,6 +602,28 @@ export class Editor {
     }
     this.pending = null
     p.resolve(r.value)
+  }
+
+  /**
+   * Exécute un script : une saisie par ligne, comme un fichier .scr d'AutoCAD (nom de
+   * commande, coordonnées, valeurs, options). Ligne vide = Entrée pendant une commande ;
+   * « ; » commence un commentaire. Renvoie le nombre de saisies envoyées.
+   */
+  async runScript(text: string): Promise<number> {
+    const settle = async () => {
+      for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0))
+    }
+    let n = 0
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim()
+      if (line.startsWith(';')) continue
+      await settle()
+      if (!line && !this.pending) continue
+      this.onText(line)
+      n++
+    }
+    await settle()
+    return n
   }
 
   // --- Poignées ----------------------------------------------------------------------

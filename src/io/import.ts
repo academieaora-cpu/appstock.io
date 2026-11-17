@@ -13,7 +13,7 @@ import { parseGeoJSON, parseGpx, parseKml, parseKmz, parseShapeZip, parseShapefi
 export interface Capability {
   id: string
   name: string
-  category: 'Lecture' | 'Écriture' | 'Calcul' | 'Affichage'
+  category: 'Lecture' | 'Écriture' | 'Calcul' | 'Affichage' | 'Automatisation' | 'Acquisition'
   formats: string
   /** Composant utilisé et sa licence. */
   component: string
@@ -41,6 +41,10 @@ export const CAPABILITIES: Capability[] = [
   { id: 'dwg-out', name: 'Export DWG', category: 'Écriture', formats: '.dwg', component: 'ACadSharp (MIT) ou ODA Drawings SDK', license: 'MIT ou commerciale', status: 'prévu', runs: 'serveur (optionnel)', description: 'Aucune brique fiable n’écrit le DWG dans le navigateur aujourd’hui : conversion DXF → DWG par un service.' },
   { id: 'landxml', name: 'LandXML', category: 'Lecture', formats: '.xml', component: 'à écrire', license: 'code du projet', status: 'prévu', runs: 'navigateur', description: 'Échange de surfaces et de points avec Covadis, Civil 3D, Mensura.' },
   { id: 'carnets', name: 'Carnets de terrain', category: 'Lecture', formats: 'Leica GSI, Trimble JXL, RW5, SDR', component: 'à écrire', license: 'code du projet', status: 'prévu', runs: 'navigateur', description: 'Import direct des observations des stations totales et récepteurs GNSS.' },
+  { id: 'projets', name: 'Profils, cubatures, division', category: 'Calcul', formats: 'MNT des points cotés', component: 'Calculs du projet (exacts, facette par facette)', license: 'code du projet', status: 'intégré', runs: 'navigateur', description: 'Profil en long et profils en travers avec guitare, cubatures sur plateforme, division de parcelle à surface imposée, transformation 2D → 3D.' },
+  { id: 'scripts', name: 'Scripts de commandes', category: 'Automatisation', formats: '.scr, .txt', component: 'Moteur de commandes du projet', license: 'code du projet', status: 'intégré', runs: 'navigateur', description: 'Enchaînement de saisies de la ligne de commande, à la manière des scripts AutoCAD et de la CAO programmable (JellyCAD).' },
+  { id: 'occt', name: 'Noyau 3D (solides, STEP, IGES)', category: 'Calcul', formats: '.step .stp .iges .igs .brep', component: 'Open CASCADE Technology compilé en WebAssembly', license: 'LGPL-2.1 (module séparé, remplaçable)', status: 'prévu', runs: 'worker isolé', description: 'Volumes d’ouvrages et de bâtiments, booléens, échanges avec les logiciels de CAO mécanique et BIM ; chargé à la demande (4 à 9 Mo).' },
+  { id: 'instruments', name: 'Pilotes d’instruments', category: 'Acquisition', formats: 'stations totales, GNSS (NMEA)', component: 'Web Serial / Web Bluetooth', license: 'code du projet', status: 'prévu', runs: 'navigateur', description: 'Connexion directe aux appareils, sur le modèle pilote et simulateur des cadres de pilotage de machines.' },
   { id: 'raster', name: 'Rasters et nuages de points', category: 'Affichage', formats: 'GeoTIFF/COG, LAS/LAZ/COPC', component: 'geotiff.js, copc.js', license: 'MIT', status: 'prévu', runs: 'navigateur', description: 'Orthophotos de drone et nuages de points, lus par morceaux.' },
   { id: 'ia', name: 'Instructions en langage naturel', category: 'Calcul', formats: 'texte', component: 'règles (aujourd’hui) ; modèle de langage (prévu)', license: 'code du projet', status: 'intégré', runs: 'navigateur', description: 'Échelle, format, type de plan et équidistance compris à partir d’une phrase. Le calcul reste déterministe.' },
 ]
