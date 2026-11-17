@@ -247,6 +247,12 @@ export function newDataset(name: string, format: string, kind: 'cad' | 'gis'): D
   }
 }
 
+/** Après restauration d'un projet : les prochains identifiants ne recoupent pas ceux des jeux restaurés. */
+export function reserveDatasetId(id: string): void {
+  const n = parseInt(id.replace(/^ds/, ''))
+  if (Number.isFinite(n) && n >= nextId) nextId = n + 1
+}
+
 export function ensureLayer(ds: Dataset, name: string, color: Color = FOREGROUND): Layer {
   let layer = ds.layers.get(name)
   if (!layer) {

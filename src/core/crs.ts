@@ -168,6 +168,12 @@ export function registerCustomCrs(definition: string, name?: string): string {
   return code
 }
 
+/** Définition d'un système personnalisé (issu d'un .prj), pour pouvoir le réenregistrer à la réouverture d'un projet. */
+export function customCrsDefinition(code: string | null): string | null {
+  if (!code || !code.startsWith('PERSO:')) return null
+  return BY_CODE.get(code)?.proj4 ?? null
+}
+
 function hash(s: string): string {
   let h = 5381
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0

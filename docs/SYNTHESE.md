@@ -1,6 +1,6 @@
 # Plateforme web universelle CAO · SIG · Topographie — synthèse
 
-*État au 16 novembre 2026. Ce document résume l'analyse, ce que le prototype prouve, ses limites et la suite proposée. Les rapports détaillés des experts sont dans [`docs/experts/`](experts/).*
+*État au 17 novembre 2026. Ce document résume l'analyse, ce que le prototype prouve, ses limites et la suite proposée. Les rapports détaillés des experts sont dans [`docs/experts/`](experts/).*
 
 ## 1. Réponse à la question : est-ce possible ?
 
@@ -17,9 +17,13 @@ Ce qui a été vérifié, et comment :
 | Génération de plan | Levé d'exemple de 150 points | Bornes, parcelle (superficie, côtés), bâtiments, voirie, courbes de niveau, légende, tableau |
 | PDF à l'échelle | A4 portrait et A3 paysage au 1/500 | PDF vectoriel, textes sélectionnables |
 | Export DXF | Relecture du DXF produit, et contrôle par un second lecteur indépendant (LibreDWG) | Mêmes entités, calques, blocs, attributs ; emprise identique au millimètre |
-| Tests automatiques | `npm test` | 16 tests passent |
+| Points comme dans Covadis | Structure comparée à celle de votre DWG (bloc `TCPOINT`, attributs `MAT`, `ALT`, `COD`, calques `TOPOJIS`, `TopoMat`, `TopoAlt`) | Identique : même bloc, mêmes attributs, mêmes positions et hauteurs |
+| Reprise du travail | Plan généré, page rechargée, travail repris | Mêmes entités, parcelle et compte rendu conservés ; coordonnées restituées bit pour bit |
+| Enregistrement en ligne | Schéma créé et contrôlé dans la base ; parcours complet (connexion, envoi, liste, réouverture) joué contre un service simulé | Requêtes conformes ; **non joué contre le vrai service** (injoignable depuis l'environnement de développement) |
+| Maintien en vie | Fonction `geo_ping` exécutée dans la base ; requête de l'application observée | Un « bip » vide au chargement, pas plus d'un par 12 heures |
+| Tests automatiques | `npm test` | 18 tests passent |
 
-Non vérifié à ce jour : ouverture du DXF exporté dans AutoCAD et Covadis eux-mêmes (aucun des deux n'est disponible dans l'environnement de développement) ; comportement sur de très gros fichiers (plus de 50 Mo) ; téléphones.
+Non vérifié à ce jour : ouverture du DXF exporté dans AutoCAD et Covadis eux-mêmes (aucun des deux n'est disponible dans l'environnement de développement) ; enregistrement en ligne contre le vrai service ; comportement sur de très gros fichiers (plus de 50 Mo) ; téléphones.
 
 ## 2. La « synthèse de langages » qui rend cela possible
 
@@ -105,6 +109,7 @@ Sept rapports ont été produits (le huitième, sur le moteur de rendu, a été 
 | 7. Génération du dessin | Fait | Calques nommés, couleurs, épaisseurs, symboles en blocs, coordonnées intactes |
 | 8. Mise en page | Fait | A4 à A0, portrait/paysage, échelles normalisées, modèle cadastral camerounais et cartouche générique, croisillons, nord, légende, tableau, échelle graphique |
 | 9. Production en un clic et par instruction | Partiel | Bouton « Analyser et générer mon plan » ; phrase en français interprétée par mots-clés |
+| Chargement d'un semis de points (dialogue Covadis) | Fait en grande partie | Séparateurs, bloc `TCPOINT`, calques, décimales d'altitude, points à Z = 0, insertion 2D/3D, symboles sur les points, décalage X/Y/Z. Reste : radical et filtrage des matricules, fichiers de paramètres Covadis |
 | 10. Plusieurs plans | Partiel | Plusieurs formats PDF d'un coup ; régénération avec d'autres options. Pas encore plusieurs plans distincts dans un même projet |
 | 11. Formats de sortie | Partiel | DXF, PDF, CSV, GeoJSON, KML. Reste : DWG (service), LandXML, TXT réorganisé |
 | 12. Contrôle final | Partiel | Compte rendu de génération et note d'ajustement à la feuille. Reste : chevauchement des textes, liste de contrôle complète |
@@ -119,7 +124,7 @@ Sept rapports ont été produits (le huitième, sur le moteur de rendu, a été 
 
 **Phase 2 — produit utilisable au quotidien.**
 1. Dessin et édition : points, polylignes, textes, déplacement, suppression, annuler/rétablir, accrochages complets (milieu, intersection, perpendiculaire).
-2. Projets enregistrés sur l'appareil, application installable et utilisable hors-ligne.
+2. Application installable et utilisable hors-ligne (la sauvegarde sur l'appareil et l'enregistrement en ligne existent déjà).
 3. Calage d'un plan local sur deux points connus (Helmert).
 4. Plan de situation généré depuis OpenStreetMap ; placement des textes sans chevauchement.
 5. Fidélité DWG : masques, hachures à motif, types de ligne, mise en forme des textes multilignes, présentations.
@@ -139,7 +144,21 @@ Sept rapports ont été produits (le huitième, sur le moteur de rendu, a été 
 3. Partage par lien, historique des versions, travail à plusieurs.
 4. Implantation GNSS depuis un téléphone Android.
 
-## 7. Décisions qui vous reviennent
+## 7. Reprise du travail et service en ligne
+
+Trois niveaux, du plus privé au plus partagé :
+
+1. **Sauvegarde automatique sur l'appareil.** Chaque modification est enregistrée dans le navigateur. À la prochaine ouverture, la plateforme propose « Reprendre mon travail ».
+2. **Projets nommés et fichier `.geoprojet`.** Enregistrés sur l'appareil, ou téléchargés en fichier pour être archivés ou transmis.
+3. **Enregistrement en ligne, facultatif.** Avec un compte (adresse électronique et mot de passe), le projet est envoyé sur le serveur et se retrouve sur un autre appareil. C'est le seul cas où un fichier quitte l'appareil.
+
+Le service en ligne est le projet Supabase « geometre-topo ». Ont été ajoutés, sans toucher aux tables existantes : la table `geo_projects`, le bucket privé `geo-projects` (50 Mo par fichier, un dossier par utilisateur) et la fonction `geo_ping`. Chaque utilisateur n'accède qu'à ses propres projets (règles de sécurité au niveau des lignes). Le serveur est dans la région `us-east-1` (États-Unis) : à considérer pour des données foncières.
+
+**Maintien en vie.** Supabase met en pause un projet gratuit après une semaine sans activité — c'est l'état actuel de votre autre projet, « academieaora-cpu's Project ». Deux « bips » l'évitent pour « geometre-topo » : l'application en envoie un à l'ouverture (au plus un par 12 heures, sans aucune donnée), et une tâche planifiée GitHub en envoie deux par jour même sans visiteur. Cette tâche ne s'exécutera qu'une fois le code fusionné dans la branche par défaut du dépôt.
+
+À savoir : selon le réglage du projet Supabase, la création d'un compte peut exiger de confirmer l'adresse par courriel, et l'envoi de courriels est limité sur l'offre gratuite.
+
+## 8. Décisions qui vous reviennent
 
 1. **Licence du produit.** Ouvert (GPL) : LibreDWG s'utilise sans réserve. Fermé : faire valider le montage « worker séparé » par un juriste, ou financer un décodeur commercial. Tant que ce n'est pas tranché, le dépôt n'a pas de licence déclarée.
 2. **Priorité métier.** Plans cadastraux camerounais (modèles officiels, mentions du MINDCAF et de l'ordre des géomètres) ou outil généraliste francophone d'abord.

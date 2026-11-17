@@ -1,0 +1,31 @@
+# « Bip » de maintien en vie.
+# Les projets Supabase gratuits sont mis en pause après une semaine sans activité.
+# Cette tâche envoie deux fois par jour une requête anodine (aucune donnée) pour que
+# l'enregistrement en ligne des projets reste disponible, même quand personne ne se connecte.
+#
+# Les tâches planifiées ne s'exécutent que depuis la branche par défaut du dépôt.
+# La clé utilisée est la clé publique du service (celle qui figure déjà dans le code du navigateur).
+name: Maintien en vie
+
+on:
+  schedule:
+    - cron: '17 5,17 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  bip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Signaler que la plateforme est utilisée
+        env:
+          CLOUD_URL: https://krsbyrpmejgqgfynoizh.supabase.co
+          CLOUD_KEY: sb_publishable_ywZ-1Y4o7blQ0xLPsqP9GA_xOk_nI2U
+        run: |
+          code=$(curl -sS -o /tmp/reponse.txt -w '%{http_code}' --max-time 30 --retry 3 --retry-delay 10 \
+            -X POST "$CLOUD_URL/rest/v1/rpc/geo_ping" \
+            -H "apikey: $CLOUD_KEY" -H 'Content-Type: application/json' -d '{}')
+          echo "Réponse $code : $(cat /tmp/reponse.txt)"
+          test "$code" = "200"

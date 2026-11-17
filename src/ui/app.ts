@@ -13,7 +13,9 @@ import { MapView, type Tool } from '../render/mapview'
 import { formatArea } from '../topo/sheet'
 import { openAssistant } from './assistant'
 import { clear, field, h, modal, select, toast } from './dom'
+import { ping } from '../cloud/cloud'
 import { openPrintDialog } from './print'
+import { findAutosave, makeAutosave, openProjectsDialog, openSnapshot, type ProjectHost } from './projects'
 
 const TYPE_NAMES: Record<Entity['t'], string> = {
   point: 'Point',
@@ -43,6 +45,22 @@ export function startApp(root: HTMLElement): void {
   const busy = h('div', { class: 'busy', hidden: true })
   stage.append(busy)
 
+  // --- Reprise du travail : sauvegarde automatique sur l'appareil -------------
+  const host: ProjectHost = {
+    project,
+    name: '',
+    getView: () => ({ cx: view.view.cx, cy: view.view.cy, scale: view.view.scale / view.dpr }),
+    setView: (v) => {
+      if (v && Number.isFinite(v.cx + v.cy + v.scale) && v.scale > 0) {
+        view.view.cx = v.cx
+        view.view.cy = v.cy
+        view.view.scale = v.scale * view.dpr
+        view.invalidate()
+      } else view.fit()
+    },
+  }
+  const autosave = makeAutosave(host)
+
   // --- Ouverture de fichiers -------------------------------------------------
   const fileInput = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => {
     if (fileInput.files?.length) void open([...fileInput.files])
@@ -51,6 +69,7 @@ export function startApp(root: HTMLElement): void {
   root.append(fileInput)
 
   const afterPlan = (r: { item: Item; scale: number; paper?: string; landscape?: boolean; showTable?: boolean; showLegend?: boolean }) => {
+    if (!host.name) host.name = r.item.ds.name
     view.fit()
     renderRight()
     toast('Plan généré. Vérifiez le compte rendu à droite, puis ouvrez « Mise en page / PDF ».', 'ok')
@@ -59,6 +78,17 @@ export function startApp(root: HTMLElement): void {
   let lastPlanSpec: Record<string, unknown> = {}
 
   async function open(files: File[]): Promise<void> {
+    // Fichier de projet enregistré par la plateforme : il remplace le travail en cours.
+    const saved = files.find((f) => f.name.toLowerCase().endsWith('.geoprojet'))
+    if (saved) {
+      try {
+        openSnapshot(host, new Uint8Array(await saved.arrayBuffer()))
+        toast(`Projet « ${host.name} » rouvert.`, 'ok')
+      } catch (err) {
+        toast(String((err as Error).message ?? err), 'erreur')
+      }
+      return
+    }
     busy.hidden = false
     busy.textContent = 'Lecture en cours…'
     const first = project.items.length === 0
@@ -77,7 +107,10 @@ export function startApp(root: HTMLElement): void {
       }
       for (const e of res.errors) toast(e, 'erreur', 9000)
       if (res.datasets.length) {
-        if (first) view.fit()
+        if (first) {
+          view.fit()
+          if (!host.name) host.name = res.datasets[0].name.replace(/\.[^.]+$/, '')
+        }
         toast(`${res.datasets.length} fichier(s) ouvert(s) : ${res.datasets.map((d) => `${d.name} (${d.entities.length} entités)`).join(', ')}`, 'ok')
       }
       if (res.points.length) openAssistant(project, res.points[0], afterPlan)
@@ -121,6 +154,7 @@ export function startApp(root: HTMLElement): void {
     h('button', { onclick: () => openAssistant(project, null, afterPlan), title: 'Du fichier de points au plan' }, 'Assistant plan'),
     h('button', { onclick: () => openPrintDialog(project, viewExtent(), lastPlanSpec) }, 'Mise en page / PDF'),
     h('button', { onclick: openExport }, 'Exporter'),
+    h('button', { onclick: () => openProjectsDialog(host), title: 'Enregistrer, rouvrir, retrouver son travail' }, 'Projets'),
     h('span', { class: 'sep' }),
     tool('select', 'Sélection', 'Cliquer un objet pour voir ses propriétés'),
     tool('distance', 'Distance', 'Mesurer une distance (double-clic pour terminer)'),
@@ -283,7 +317,10 @@ export function startApp(root: HTMLElement): void {
   view.onMeasure = renderRight
 
   project.on((what) => {
-    if (what === 'data' || what === 'view') renderLeft()
+    if (what === 'data' || what === 'view') {
+      renderLeft()
+      autosave()
+    }
     renderRight()
     updateScale()
   })
@@ -428,4 +465,31 @@ export function startApp(root: HTMLElement): void {
   renderLeft()
   renderRight()
   updateScale()
+
+  // Travail en cours retrouvé : proposé en un clic, jamais rouvert sans demander.
+  void findAutosave().then((found) => {
+    if (!found || project.items.length) return
+    const date = new Date(found.savedAt).toLocaleString('fr-FR', { dateStyle: 'long', timeStyle: 'short' })
+    const box = hint.firstElementChild as HTMLElement
+    box.prepend(
+      h(
+        'div',
+        { class: 'note ok', style: 'margin-bottom:14px;text-align:left' },
+        h('b', null, 'Travail en cours retrouvé'),
+        h('br'),
+        `Enregistré le ${date} : ${found.files.slice(0, 3).join(', ')}${found.files.length > 3 ? '…' : ''}`,
+        h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => {
+          try {
+            openSnapshot(host, found.bytes)
+            toast('Travail repris là où vous l’aviez laissé.', 'ok')
+          } catch (err) {
+            toast(String((err as Error).message ?? err), 'erreur')
+          }
+        } }, 'Reprendre mon travail')),
+      ),
+    )
+  })
+
+  // « Bip » de maintien en vie du service en ligne (au plus une fois toutes les 12 heures, sans aucune donnée).
+  setTimeout(ping, 4000)
 }

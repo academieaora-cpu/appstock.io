@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { detectCrs, transform } from '../src/core/crs'
 import { ringArea, tessellateBulges } from '../src/core/geom'
+import { Project } from '../src/core/project'
+import { restoreSnapshot, snapshotInfo, takeSnapshot } from '../src/core/snapshot'
 import { parseDxf } from '../src/io/dxf-reader'
 import { exportDxf } from '../src/io/export'
 import { buildDisplayList, layerVisibility } from '../src/render/scene'
@@ -182,5 +184,39 @@ describe('géométrie CAO', () => {
     expect(ds.entities[0]).toMatchObject({ t: 'insert', block: 'PT', x: 100, y: 200, props: { MAT: 'S12' } })
     expect(ds.entities[1]).toMatchObject({ t: 'pline', closed: true, layer: 'Parcelle' })
     expect(ds.blocks.get('PT')!.entities).toHaveLength(1)
+  })
+})
+
+describe('reprise du travail', () => {
+  it('enregistre un projet et le rouvre à l’identique (géométrie, calques, système, parcelle)', () => {
+    const f = parsePointsText(csv)
+    const plan = generatePlan(f.points, DEFAULT_RULES, { ...DEFAULT_PLAN, contourInterval: 0.5 }, 'essai')
+    plan.dataset.crs = 'EPSG:32632'
+    const a = new Project()
+    a.add(plan.dataset, plan)
+    const bytes = takeSnapshot(a, { cx: 783640, cy: 427200, scale: 3 }, 'Parcelle essai')
+    expect(snapshotInfo(bytes)).toMatchObject({ name: 'Parcelle essai', files: ['essai'] })
+
+    const b = new Project()
+    const r = restoreSnapshot(bytes, b)
+    expect(r).toMatchObject({ name: 'Parcelle essai', view: { cx: 783640, cy: 427200, scale: 3 } })
+    expect(b.crs).toBe('EPSG:32632')
+    expect(b.items).toHaveLength(1)
+    const back = b.items[0]
+    expect(back.ds.entities.length).toBe(plan.dataset.entities.length)
+    expect([...back.ds.layers.keys()]).toEqual([...plan.dataset.layers.keys()])
+    expect(back.dl.counts).toEqual(a.items[0].dl.counts)
+    expect(back.dl.extent).toEqual(a.items[0].dl.extent)
+    // Les coordonnées reviennent bit pour bit.
+    const p0 = plan.dataset.entities.find((e) => e.t === 'pline')
+    const p1 = back.ds.entities.find((e) => e.t === 'pline')
+    expect(p1 && p1.t === 'pline' && p1.pts instanceof Float64Array).toBe(true)
+    expect(p1 && p1.t === 'pline' && Array.from(p1.pts)).toEqual(p0 && p0.t === 'pline' && Array.from(p0.pts))
+    expect(back.plan!.parcel!.area).toBe(plan.parcel!.area)
+    expect(back.plan!.report.length).toBe(plan.report.length)
+  })
+
+  it('refuse un fichier qui n’est pas un projet', () => {
+    expect(() => snapshotInfo(new TextEncoder().encode('bonjour'))).toThrow(/n’est pas un projet/)
   })
 })
