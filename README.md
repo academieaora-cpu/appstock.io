@@ -8,6 +8,12 @@ Plateforme web pour la topographie et la géomatique : ouvrir des plans DWG et D
 
 ## Ce que fait le prototype
 
+**Environnement de dessin type AutoCAD / Covadis** : barre de menus (Fichier, Édition, Affichage, Dessin, Cotation, Modification, Topo Calculs, Topo 2D, Topo 3D, Édition plan, Outils, Aide), ruban à onglets, ligne de commande (L, PL, POL, C, COT, D…), accrochages (extrémité, milieu, centre, intersection, perpendiculaire), mode ortho, poignées, sélection par fenêtre, annuler/rétablir, calques. Plus de 40 commandes, dont ligne, polyligne, polygone, cercle, arc, multiligne, texte, hachures, cotes, déplacer, copier, rotation, échelle, miroir, décaler, décomposer, distance et gisement, surface, points rayonnés, point topo, numérotation des sommets, tableau des coordonnées, étiquette de surface, symboles, MNT, courbes de niveau. Un manuel intégré (F1), généré à partir des commandes, explique où trouver chaque outil et le lance d'un clic.
+
+**Nouveau plan** : à l'ouverture d'un fichier, un assistant demande le type de document (croquis, bornage, morcellement, état des lieux, topographique, altimétrique, implantation, situation), le format, l'échelle et les renseignements ; le titre est rédigé selon le modèle et le cadre de la feuille est calé dans le dessin.
+
+**Comptes** : écran d'entrée (connexion, inscription, essai sans compte), « Mon compte », tableau de bord administrateur.
+
 - **Ouvrir** : DWG (R14 à 2018), DXF, Shapefile, GeoJSON, KML/KMZ, GPX, fichiers de points TXT/CSV/XYZ.
 - **Superposer** : chaque fichier garde son système de coordonnées ; tout est reprojeté à la volée dans celui du projet. Le système d'un DWG qui n'en déclare pas est proposé automatiquement (UTM, Lambert…), à confirmer.
 - **Consulter** : calques, sélection d'un objet (dimensions, attributs), mesures de distance et de surface avec accrochage, fond de carte.

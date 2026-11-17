@@ -220,3 +220,13 @@ describe('reprise du travail', () => {
     expect(() => snapshotInfo(new TextEncoder().encode('bonjour'))).toThrow(/n’est pas un projet/)
   })
 })
+
+describe('recherche de systèmes de coordonnées', () => {
+  it('« UTM 32 Nord » trouve d’abord la zone 32, pas EPSG:32601', async () => {
+    const { searchCrs } = await import('../src/core/crs')
+    expect(searchCrs('UTM 32 Nord')[0].code).toBe('EPSG:32632')
+    expect(searchCrs('2154')[0].code).toBe('EPSG:2154')
+    expect(searchCrs('lambert 93')[0].code).toBe('EPSG:2154')
+    expect(searchCrs('cameroun').some((d) => d.code === 'EPSG:32632')).toBe(true)
+  })
+})

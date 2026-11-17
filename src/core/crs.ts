@@ -359,20 +359,40 @@ export function detectCrs(extent: Extent, hint: [number, number] | null = region
 
 /** Recherche dans le catalogue (code, nom, pays). */
 export function searchCrs(query: string): CrsDef[] {
-  const q = query
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .trim()
-  if (!q) return []
-  const words = q.split(/\s+/)
-  return CATALOG.filter((d) => {
-    const hay = (d.code + ' ' + d.name + ' ' + d.area)
+  const fold = (t: string) =>
+    t
       .toLowerCase()
       .normalize('NFD')
-      .replace(/[̀-ͯ]/g, '')
-    return words.every((w) => hay.includes(w))
-  }).slice(0, 30)
+      .replace(/[\u0300-\u036f]/g, '')
+  const q = fold(query).trim()
+  if (!q) return []
+  const words = q.split(/\s+/)
+  const scored: { d: CrsDef; score: number }[] = []
+  for (const d of CATALOG) {
+    const name = fold(d.name)
+    const area = fold(d.area)
+    const code = fold(d.code)
+    let score = 0
+    let ok = true
+    for (const w of words) {
+      if (/^\d+$/.test(w)) {
+        // Un nombre désigne une zone ou un code entier : « 32 » ne doit pas trouver EPSG:32601.
+        const re = new RegExp('(^|[^\\d])' + w + '([^\\d]|$)')
+        if (re.test(name)) score += 3
+        else if (code === 'epsg:' + w) score += 5
+        else if (re.test(area)) score += 1
+        else ok = false
+      } else if (name.includes(w)) score += 2
+      else if (code.includes(w) || area.includes(w)) score += 1
+      else ok = false
+      if (!ok) break
+    }
+    if (ok) scored.push({ d, score })
+  }
+  return scored
+    .sort((x, y) => y.score - x.score)
+    .slice(0, 30)
+    .map((x) => x.d)
 }
 
 /** Libellé court d'un système : « UTM 32 Nord », « Lambert-93 »… */

@@ -30,6 +30,8 @@ interface Snapshot {
   customCrs: Record<string, string>
   view: ViewState | null
   items: StoredItem[]
+  /** Réglages du document (type de plan, format, renseignements) : objet libre côté interface. */
+  doc?: unknown
 }
 
 export interface SnapshotInfo {
@@ -39,7 +41,7 @@ export interface SnapshotInfo {
 }
 
 /** Sérialise le projet. Les tableaux numériques gardent toute leur précision. */
-export function takeSnapshot(project: Project, view: ViewState | null, name: string): Uint8Array {
+export function takeSnapshot(project: Project, view: ViewState | null, name: string, doc?: unknown): Uint8Array {
   const customCrs: Record<string, string> = {}
   for (const code of [project.crs, ...project.items.map((i) => i.ds.crs)]) {
     const def = customCrsDefinition(code)
@@ -54,6 +56,7 @@ export function takeSnapshot(project: Project, view: ViewState | null, name: str
     customCrs,
     view,
     items: project.items.map((i) => ({ ds: i.ds, ...(i.plan ? { plan: { parcel: i.plan.parcel, legend: i.plan.legend, report: i.plan.report } } : {}) })),
+    ...(doc ? { doc } : {}),
   }
   const json = JSON.stringify(snap, (_k, v: unknown) => {
     if (v instanceof Float64Array) return { $f64: Array.from(v) }
@@ -89,7 +92,7 @@ export function snapshotInfo(bytes: Uint8Array): SnapshotInfo {
 }
 
 /** Remplace le contenu du projet par celui de l'instantané. Renvoie la vue enregistrée. */
-export function restoreSnapshot(bytes: Uint8Array, project: Project): { name: string; view: ViewState | null } {
+export function restoreSnapshot(bytes: Uint8Array, project: Project): { name: string; view: ViewState | null; doc: unknown } {
   const snap = parse(bytes)
   for (const def of Object.values(snap.customCrs ?? {})) {
     try {
@@ -104,5 +107,5 @@ export function restoreSnapshot(bytes: Uint8Array, project: Project): { name: st
     reserveDatasetId(it.ds.id)
     project.add(it.ds, it.plan ? { dataset: it.ds, parcel: it.plan.parcel, legend: it.plan.legend, report: it.plan.report, tin: null } : undefined)
   }
-  return { name: snap.name, view: snap.view }
+  return { name: snap.name, view: snap.view, doc: snap.doc ?? null }
 }

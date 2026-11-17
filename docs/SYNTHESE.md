@@ -2,6 +2,19 @@
 
 *État au 17 novembre 2026. Ce document résume l'analyse, ce que le prototype prouve, ses limites et la suite proposée. Les rapports détaillés des experts sont dans [`docs/experts/`](experts/).*
 
+## 0. Mise à jour du 17 novembre 2026 : l'environnement de dessin
+
+Suite à votre retour (« trop d'impression, pas assez d'environnement de dessin »), la plateforme a été réorganisée autour du dessin :
+
+- **Interface** : barre de menus calquée sur AutoCAD et Covadis, ruban à onglets (Début, Topographie, Mise en page, Affichage), ligne de commande où l'on tape les commandes et les coordonnées, barre d'état (ACCROCHAGE F3, ORTHO F8), réticule, fond sombre.
+- **Moteur d'édition** : commandes interactives avec aperçu en direct, accrochages aux objets, saisie clavier (X,Y ; @dx,dy ; @distance<angle ; @distance<gisement g ; distance directe), poignées, sélection par clic ou fenêtre, annuler/rétablir, fichier actif et calque courant.
+- **Outils** : dessin (ligne, polyligne, polygone avec surface en direct, rectangle, polygone régulier, cercle, arc, point, multiligne, texte, hachures), cotation (cote alignée, cotes des côtés), modification (effacer, déplacer, copier, rotation, échelle, miroir, décaler, décomposer), calculs topo (distance et gisement en grades, coordonnées, surface et périmètre, points rayonnés), topo 2D (point topo TCPOINT, numérotation des sommets avec bornes, tableau des coordonnées, étiquette de surface, symboles, semis de points), topo 3D (MNT, courbes de niveau).
+- **Manuel intégré** (panneau de droite, F1) : généré à partir des commandes, avec recherche, chemins d'accès, étapes, bouton « Lancer », mots-clés de l'assistant.
+- **Nouveau plan** : type de document, format, échelle, renseignements ; titre rédigé selon le modèle (bornage, morcellement, état des lieux…) ; cadre de la feuille calé dans le dessin (commande CADRE) ; la parcelle et ses numéros de bornes dessinés à la main alimentent la superficie et le tableau des coordonnées de la feuille.
+- **Comptes** : écran d'entrée, profil, administrateur par code à usage unique, tableau de bord des utilisateurs. La partie base de données attend votre confirmation (voir le message de livraison).
+
+Sources consultées pour Covadis : les manuels détaillés en ligne étaient inaccessibles (pages payantes ou bloquées) ; les menus et chemins confirmés (« Covadis 2D ⟹ Points topographiques ⟹ Chargement de semis », « Cov.Calculs ⟹ Points rayonnés », menus Cov.Calculs, Covadis 2D, Covadis 3D, Cov.Édition) et votre capture d'écran ont servi de référence. Les noms de menus de la plateforme (« Topo Calculs », « Topo 2D »…) évitent d'utiliser la marque Covadis.
+
 ## 1. Réponse à la question : est-ce possible ?
 
 **Oui.** Le prototype de ce dépôt ouvre de vrais fichiers DWG dans le navigateur, sans serveur et sans installation, les superpose à des données SIG dans un système de coordonnées commun, génère un plan topographique à partir d'un fichier de points et l'imprime en PDF à l'échelle, du A4 au A0.

@@ -1,23 +1,23 @@
 /**
- * Vue interactive : déplacement, zoom, sélection, mesures avec accrochage.
+ * Zone de dessin : affichage, navigation et entrées souris, sur le modèle d'AutoCAD.
  *
- * La scène est tracée dans une image tampon ; pendant un déplacement, c'est cette
- * image qui est recalée instantanément, puis la scène est retracée dès que possible.
- * L'interface reste fluide même sur un dessin lourd ou un appareil modeste.
+ * - molette : zoom autour du curseur ; clic molette, Espace + glisser ou un doigt : déplacer ;
+ * - clic : désigner un objet ou donner un point à la commande en cours ;
+ * - glisser sur le vide : fenêtre de sélection (vers la droite : objets entièrement dedans ;
+ *   vers la gauche : objets touchés) ;
+ * - clic droit : Entrée (terminer la commande ou la répéter).
+ *
+ * La scène est tracée dans une image tampon ; pendant un déplacement, c'est cette image
+ * qui est recalée, puis la scène est retracée : l'affichage reste fluide sur un gros plan.
  */
-import { distToSegment2, pointInRing, polylineLength, ringArea } from '../core/geom'
-import type { Item, Project, Selection } from '../core/project'
+import type { Editor } from '../edit/editor'
+import type { Snap } from '../edit/query'
+import type { Project } from '../core/project'
 import type { Extent } from '../core/types'
 import { TILE_SOURCES, drawBasemap } from './basemap'
 import { CanvasPainter, drawDisplayList, type View } from './painter'
 
-export type Tool = 'select' | 'distance' | 'area'
-
-export interface Snap {
-  x: number
-  y: number
-  kind: 'sommet' | 'point' | 'libre'
-}
+type Mode = 'pending' | 'pan' | 'window' | 'grip' | 'gripclick'
 
 export class MapView {
   readonly canvas: HTMLCanvasElement
@@ -26,29 +26,28 @@ export class MapView {
   private sceneCtx: CanvasRenderingContext2D
   private sceneView: View | null = null
   view: View = { cx: 0, cy: 0, scale: 1, ox: 0, oy: 0 }
-  dark = false
+  dark = true
   basemap = 'aucun'
-  tool: Tool = 'select'
-  snapEnabled = true
-  /** Points de la mesure en cours (coordonnées du projet). */
-  measure: number[] = []
-  measureDone = false
-  private cursor: Snap | null = null
+  /** Espace enfoncée : glisser déplace la vue. */
+  spaceDown = false
+  /** Dessins supplémentaires en surcouche (cadre de mise en page…). */
+  overlays: ((c: CanvasRenderingContext2D, mv: MapView) => void)[] = []
   private dirty = true
   private frame = 0
   private lastRenderMs = 0
   private idleTimer = 0
-  private highlight: { item: Item; polys: number[]; points: number[]; texts: number[]; fills: number[] } | null = null
   private pointers = new Map<number, { x: number; y: number }>()
-  private dragStart: { x: number; y: number; moved: boolean } | null = null
+  private drag: { x: number; y: number; mode: Mode; moved: boolean } | null = null
   private pinch: { d: number; cx: number; cy: number } | null = null
+  private hover: [number, number] | null = null
+  private windowRect: [number, number, number, number] | null = null
   onCursor: (x: number, y: number, snap: Snap | null) => void = () => {}
-  onMeasure: () => void = () => {}
   onViewChange: () => void = () => {}
 
   constructor(
     private container: HTMLElement,
     private project: Project,
+    private editor: Editor,
   ) {
     this.canvas = document.createElement('canvas')
     this.canvas.className = 'map-canvas'
@@ -60,10 +59,10 @@ export class MapView {
     new ResizeObserver(() => this.resize()).observe(container)
     this.resize()
     this.bind()
-    project.on((what) => {
-      if (what === 'selection') this.updateHighlight()
-      else this.highlight = null
-      if (what !== 'selection') this.dirty = true
+    editor.pickTol = () => (7 * this.dpr) / this.view.scale
+    editor.requestDraw = () => this.schedule()
+    project.on(() => {
+      this.dirty = true
       this.schedule()
     })
   }
@@ -108,7 +107,7 @@ export class MapView {
     this.onViewChange()
   }
 
-  private schedule(): void {
+  schedule(): void {
     if (this.frame) return
     this.frame = requestAnimationFrame(() => {
       this.frame = 0
@@ -120,14 +119,21 @@ export class MapView {
     return [this.view.cx + (px - this.view.ox) / this.view.scale, this.view.cy - (py - this.view.oy) / this.view.scale]
   }
 
-  toScreen(x: number, y: number): [number, number] {
-    return [this.view.ox + (x - this.view.cx) * this.view.scale, this.view.oy - (y - this.view.cy) * this.view.scale]
-  }
+  toScreen = (x: number, y: number): [number, number] => [this.view.ox + (x - this.view.cx) * this.view.scale, this.view.oy - (y - this.view.cy) * this.view.scale]
 
-  private viewport(): Extent {
+  viewport(): Extent {
     const a = this.toWorld(0, this.canvas.height)
     const b = this.toWorld(this.canvas.width, 0)
     return [a[0], a[1], b[0], b[1]]
+  }
+
+  zoomBy(factor: number, px = this.canvas.width / 2, py = this.canvas.height / 2): void {
+    const w = this.toWorld(px, py)
+    this.view.scale = Math.max(1e-9, Math.min(1e9, this.view.scale * factor))
+    this.view.cx = w[0] - (px - this.view.ox) / this.view.scale
+    this.view.cy = w[1] + (py - this.view.oy) / this.view.scale
+    this.schedule()
+    this.onViewChange()
   }
 
   private renderScene(): void {
@@ -138,16 +144,15 @@ export class MapView {
     c.setTransform(1, 0, 0, 1, 0, 0)
     const source = TILE_SOURCES.find((s) => s.id === this.basemap)
     const withMap = !!source && !!this.project.crs
-    c.fillStyle = this.dark && !withMap ? '#1b1f24' : '#ffffff'
+    c.fillStyle = this.dark && !withMap ? '#20252c' : '#ffffff'
     c.fillRect(0, 0, w, h)
     let mapDrawn = false
-    if (withMap) {
+    if (withMap && source) {
       mapDrawn = drawBasemap(c, this.view, w, h, this.project.crs as string, source, () => {
         this.dirty = true
         this.schedule()
       })
       if (mapDrawn) {
-        // Voile clair : le dessin reste lisible par-dessus la carte.
         c.fillStyle = 'rgba(255,255,255,0.25)'
         c.fillRect(0, 0, w, h)
       }
@@ -159,7 +164,7 @@ export class MapView {
     for (const item of this.project.items) {
       if (!item.ds.visible) continue
       drawDisplayList(painter, item.dl, this.view, {
-        foreground: light ? [20, 20, 20] : [240, 240, 240],
+        foreground: light ? [20, 20, 20] : [235, 235, 235],
         lightBackground: light,
         lineWidth: (lw) => (lw >= 0.3 ? Math.min(4, 1 + lw * 2.2) : 1) * dpr,
         pointRadius: 1.4 * dpr,
@@ -185,12 +190,12 @@ export class MapView {
   }
 
   private draw(): void {
-    const same = this.sceneView && this.sceneView.cx === this.view.cx && this.sceneView.cy === this.view.cy && this.sceneView.scale === this.view.scale
-    if (this.dirty || !this.sceneView || (!same && this.lastRenderMs < 28)) {
+    const sv0 = this.sceneView
+    const same = sv0 && sv0.cx === this.view.cx && sv0.cy === this.view.cy && sv0.scale === this.view.scale
+    if (this.dirty || !sv0 || (!same && this.lastRenderMs < 28)) {
       this.renderScene()
       this.dirty = false
     } else if (!same) {
-      // Scène lourde : on recale l'image existante et on retrace au repos.
       clearTimeout(this.idleTimer)
       this.idleTimer = window.setTimeout(() => {
         this.dirty = true
@@ -200,228 +205,53 @@ export class MapView {
     const c = this.ctx
     const sv = this.sceneView as View
     c.setTransform(1, 0, 0, 1, 0, 0)
-    if (sv.cx === this.view.cx && sv.cy === this.view.cy && sv.scale === this.view.scale) {
-      c.drawImage(this.scene, 0, 0)
-    } else {
-      c.fillStyle = this.dark ? '#1b1f24' : '#ffffff'
+    if (sv.cx === this.view.cx && sv.cy === this.view.cy && sv.scale === this.view.scale) c.drawImage(this.scene, 0, 0)
+    else {
+      c.fillStyle = this.dark ? '#20252c' : '#ffffff'
       c.fillRect(0, 0, this.canvas.width, this.canvas.height)
       const r = this.view.scale / sv.scale
       c.setTransform(r, 0, 0, r, this.view.ox + (sv.cx - this.view.cx) * this.view.scale - sv.ox * r, this.view.oy - (sv.cy - this.view.cy) * this.view.scale - sv.oy * r)
       c.drawImage(this.scene, 0, 0)
       c.setTransform(1, 0, 0, 1, 0, 0)
     }
-    this.drawOverlay()
-  }
-
-  // --- Surcouche : sélection, mesure, accrochage ----------------------------
-
-  private updateHighlight(): void {
-    const sel = this.project.selection
-    if (!sel) {
-      this.highlight = null
-      return
+    const dark = this.dark && !(TILE_SOURCES.some((s) => s.id === this.basemap) && this.project.crs)
+    for (const o of this.overlays) o(c, this)
+    this.editor.draw(c, this.toScreen, this.dpr, dark)
+    if (this.windowRect) {
+      const [x0, y0, x1, y1] = this.windowRect
+      const crossing = x1 < x0
+      c.save()
+      c.fillStyle = crossing ? 'rgba(60,200,90,0.15)' : 'rgba(60,130,255,0.15)'
+      c.strokeStyle = crossing ? '#3cc85a' : '#3c82ff'
+      c.lineWidth = 1 * this.dpr
+      if (crossing) c.setLineDash([6 * this.dpr, 4 * this.dpr])
+      c.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0))
+      c.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0))
+      c.restore()
     }
-    const dl = sel.item.dl
-    const polys: number[] = []
-    const points: number[] = []
-    const texts: number[] = []
-    const fills: number[] = []
-    for (let i = 0; i < dl.polyEnt.length; i++) if (dl.polyEnt[i] === sel.entity) polys.push(i)
-    for (let i = 0; i < dl.pointEnt.length; i++) if (dl.pointEnt[i] === sel.entity) points.push(i)
-    dl.texts.forEach((t, i) => t.ent === sel.entity && texts.push(i))
-    dl.fills.forEach((f, i) => f.ent === sel.entity && fills.push(i))
-    this.highlight = { item: sel.item, polys, points, texts, fills }
-  }
-
-  private drawOverlay(): void {
-    const c = this.ctx
-    const dpr = this.dpr
-    const hl = this.highlight
-    if (hl) {
-      const dl = hl.item.dl
-      c.lineJoin = 'round'
-      c.lineCap = 'round'
-      for (const pass of [
-        { color: 'rgba(255,255,255,0.9)', width: 6 * dpr },
-        { color: '#ff3d9a', width: 3 * dpr },
-      ]) {
-        c.strokeStyle = pass.color
-        c.lineWidth = pass.width
-        c.beginPath()
-        for (const i of hl.polys) {
-          const from = dl.polyStart[i] * 2
-          const to = dl.polyStart[i + 1] * 2
-          const p = this.toScreen(dl.coords[from], dl.coords[from + 1])
-          c.moveTo(p[0], p[1])
-          for (let j = from + 2; j < to; j += 2) {
-            const q = this.toScreen(dl.coords[j], dl.coords[j + 1])
-            c.lineTo(q[0], q[1])
-          }
-          if (dl.polyClosed[i]) c.closePath()
-        }
-        for (const i of hl.fills) {
-          for (const r of dl.fills[i].rings) {
-            const p = this.toScreen(r[0], r[1])
-            c.moveTo(p[0], p[1])
-            for (let j = 2; j < r.length; j += 2) {
-              const q = this.toScreen(r[j], r[j + 1])
-              c.lineTo(q[0], q[1])
-            }
-            c.closePath()
-          }
-        }
-        c.stroke()
-      }
-      c.fillStyle = '#ff3d9a'
-      c.strokeStyle = '#ffffff'
-      c.lineWidth = 2 * dpr
-      for (const i of hl.points) {
-        const p = this.toScreen(dl.points[i * 2], dl.points[i * 2 + 1])
-        c.beginPath()
-        c.arc(p[0], p[1], 6 * dpr, 0, Math.PI * 2)
-        c.fill()
-        c.stroke()
-      }
-      for (const i of hl.texts) {
-        const t = dl.texts[i]
-        const p = this.toScreen(t.x, t.y)
-        c.beginPath()
-        c.arc(p[0], p[1], 5 * dpr, 0, Math.PI * 2)
-        c.fill()
-        c.stroke()
-      }
-    }
-    // Mesure en cours
-    if (this.measure.length >= 2) {
-      const pts = [...this.measure]
-      if (!this.measureDone && this.cursor) pts.push(this.cursor.x, this.cursor.y)
-      c.lineWidth = 2 * dpr
-      c.strokeStyle = '#0a84ff'
-      c.fillStyle = 'rgba(10,132,255,0.15)'
+    // Réticule
+    if (this.hover && !this.drag?.moved) {
+      const [hx, hy] = this.hover
+      const dpr = this.dpr
+      const arm = 22 * dpr
+      c.save()
+      c.strokeStyle = dark ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.85)'
+      c.lineWidth = 1
       c.beginPath()
-      for (let i = 0; i < pts.length; i += 2) {
-        const p = this.toScreen(pts[i], pts[i + 1])
-        if (i === 0) c.moveTo(p[0], p[1])
-        else c.lineTo(p[0], p[1])
-      }
-      if (this.tool === 'area' && pts.length >= 6) {
-        c.closePath()
-        c.fill()
-      }
+      c.moveTo(hx - arm, hy + 0.5)
+      c.lineTo(hx + arm, hy + 0.5)
+      c.moveTo(hx + 0.5, hy - arm)
+      c.lineTo(hx + 0.5, hy + arm)
       c.stroke()
-      c.fillStyle = '#0a84ff'
-      for (let i = 0; i < this.measure.length; i += 2) {
-        const p = this.toScreen(this.measure[i], this.measure[i + 1])
-        c.beginPath()
-        c.arc(p[0], p[1], 3.5 * dpr, 0, Math.PI * 2)
-        c.fill()
+      if (!this.editor.busy || this.editor.promptText.startsWith('Sélectionnez')) {
+        const b = 5 * dpr
+        c.strokeRect(hx - b + 0.5, hy - b + 0.5, 2 * b, 2 * b)
       }
-    }
-    // Marque d'accrochage
-    if (this.tool !== 'select' && this.cursor && this.cursor.kind !== 'libre') {
-      const p = this.toScreen(this.cursor.x, this.cursor.y)
-      const r = 7 * dpr
-      c.strokeStyle = '#ff9500'
-      c.lineWidth = 2 * dpr
-      c.strokeRect(p[0] - r, p[1] - r, r * 2, r * 2)
+      c.restore()
     }
   }
 
-  /** Longueur et surface de la mesure en cours. */
-  measureResult(): { length: number; area: number; points: number } {
-    const pts = [...this.measure]
-    if (!this.measureDone && this.cursor && pts.length) pts.push(this.cursor.x, this.cursor.y)
-    return { length: polylineLength(pts, this.tool === 'area' && pts.length >= 6), area: Math.abs(ringArea(pts)), points: pts.length >> 1 }
-  }
-
-  setTool(tool: Tool): void {
-    this.tool = tool
-    this.measure = []
-    this.measureDone = false
-    this.canvas.style.cursor = tool === 'select' ? 'default' : 'crosshair'
-    this.onMeasure()
-    this.schedule()
-  }
-
-  // --- Sélection et accrochage ----------------------------------------------
-
-  pick(x: number, y: number): Selection | null {
-    const tol = (7 * this.dpr) / this.view.scale
-    let best: Selection | null = null
-    let bestD = Infinity
-    for (let k = this.project.items.length - 1; k >= 0; k--) {
-      const item = this.project.items[k]
-      if (!item.ds.visible) continue
-      const dl = item.dl
-      if (dl.pointIndex) {
-        for (const i of dl.pointIndex.search(x - tol, y - tol, x + tol, y + tol)) {
-          if (!item.vis[dl.pointLayer[i]]) continue
-          const d = Math.hypot(dl.points[i * 2] - x, dl.points[i * 2 + 1] - y) * 0.5
-          if (d < bestD) [bestD, best] = [d, { item, entity: dl.pointEnt[i] }]
-        }
-      }
-      if (dl.polyIndex) {
-        for (const i of dl.polyIndex.search(x - tol, y - tol, x + tol, y + tol)) {
-          if (!item.vis[dl.polyLayer[i]]) continue
-          const from = dl.polyStart[i] * 2
-          const to = dl.polyStart[i + 1] * 2
-          let d2 = Infinity
-          for (let j = from; j < to - 2; j += 2) d2 = Math.min(d2, distToSegment2(x, y, dl.coords[j], dl.coords[j + 1], dl.coords[j + 2], dl.coords[j + 3])[0])
-          if (dl.polyClosed[i]) d2 = Math.min(d2, distToSegment2(x, y, dl.coords[to - 2], dl.coords[to - 1], dl.coords[from], dl.coords[from + 1])[0])
-          const d = Math.sqrt(d2)
-          if (d <= tol && d < bestD) [bestD, best] = [d, { item, entity: dl.polyEnt[i] }]
-        }
-      }
-      for (const t of dl.texts) {
-        if (!item.vis[t.layer]) continue
-        const reach = Math.max(t.h * t.text.length * 0.5, tol)
-        if (Math.abs(t.x - x) > reach || Math.abs(t.y - y) > Math.max(t.h * 1.2, tol)) continue
-        const d = Math.hypot(t.x - x, t.y - y) * 0.2
-        if (d < bestD && d < tol) [bestD, best] = [d, { item, entity: t.ent }]
-      }
-      if (!best) {
-        for (const f of dl.fills) {
-          if (!item.vis[f.layer]) continue
-          if (x < f.bbox[0] || x > f.bbox[2] || y < f.bbox[1] || y > f.bbox[3]) continue
-          let inside = false
-          for (const r of f.rings) if (pointInRing(x, y, r)) inside = !inside
-          if (inside && tol * 0.95 < bestD) [bestD, best] = [tol * 0.95, { item, entity: f.ent }]
-        }
-      }
-    }
-    return best
-  }
-
-  private snapAt(x: number, y: number): Snap {
-    if (!this.snapEnabled) return { x, y, kind: 'libre' }
-    const tol = (11 * this.dpr) / this.view.scale
-    let best: Snap = { x, y, kind: 'libre' }
-    let bestD = tol
-    for (const item of this.project.items) {
-      if (!item.ds.visible) continue
-      const dl = item.dl
-      if (dl.pointIndex) {
-        for (const i of dl.pointIndex.search(x - tol, y - tol, x + tol, y + tol)) {
-          if (!item.vis[dl.pointLayer[i]]) continue
-          const d = Math.hypot(dl.points[i * 2] - x, dl.points[i * 2 + 1] - y)
-          if (d < bestD) [bestD, best] = [d, { x: dl.points[i * 2], y: dl.points[i * 2 + 1], kind: 'point' }]
-        }
-      }
-      if (dl.polyIndex) {
-        for (const i of dl.polyIndex.search(x - tol, y - tol, x + tol, y + tol)) {
-          if (!item.vis[dl.polyLayer[i]]) continue
-          const to = dl.polyStart[i + 1] * 2
-          for (let j = dl.polyStart[i] * 2; j < to; j += 2) {
-            const d = Math.hypot(dl.coords[j] - x, dl.coords[j + 1] - y)
-            if (d < bestD) [bestD, best] = [d, { x: dl.coords[j], y: dl.coords[j + 1], kind: 'sommet' }]
-          }
-        }
-      }
-    }
-    return best
-  }
-
-  // --- Interactions ---------------------------------------------------------
+  // --- Entrées ------------------------------------------------------------------------
 
   private bind(): void {
     const cv = this.canvas
@@ -429,36 +259,47 @@ export class MapView {
       const r = cv.getBoundingClientRect()
       return [(e.clientX - r.left) * this.dpr, (e.clientY - r.top) * this.dpr]
     }
-    const zoomAt = (px: number, py: number, factor: number) => {
-      const w = this.toWorld(px, py)
-      this.view.scale = Math.max(1e-9, Math.min(1e9, this.view.scale * factor))
-      this.view.cx = w[0] - (px - this.view.ox) / this.view.scale
-      this.view.cy = w[1] + (py - this.view.oy) / this.view.scale
-      this.schedule()
-      this.onViewChange()
-    }
     cv.addEventListener(
       'wheel',
       (e) => {
         e.preventDefault()
         const [px, py] = pos(e)
-        zoomAt(px, py, Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0016)))
+        this.zoomBy(Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0016)), px, py)
       },
       { passive: false },
     )
+    cv.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      this.editor.onEnter()
+    })
     cv.addEventListener('pointerdown', (e) => {
+      cv.focus({ preventScroll: true })
+      if (e.button === 2) return
       cv.setPointerCapture(e.pointerId)
       const [px, py] = pos(e)
       this.pointers.set(e.pointerId, { x: px, y: py })
-      if (this.pointers.size === 1) this.dragStart = { x: px, y: py, moved: false }
-      else if (this.pointers.size === 2) {
+      if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()]
         this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 }
-        if (this.dragStart) this.dragStart.moved = true
+        if (this.drag) this.drag.mode = 'pan'
+        return
       }
+      const w = this.toWorld(px, py)
+      let mode: Mode = 'pending'
+      if (e.button === 1 || this.spaceDown) mode = 'pan'
+      else if (this.editor.gripActive) mode = 'gripclick'
+      else {
+        const g = this.editor.gripAt(w)
+        if (g) {
+          this.editor.startGrip(g)
+          mode = 'grip'
+        }
+      }
+      this.drag = { x: px, y: py, mode, moved: false }
     })
     cv.addEventListener('pointermove', (e) => {
       const [px, py] = pos(e)
+      this.hover = [px, py]
       const prev = this.pointers.get(e.pointerId)
       if (prev && this.pointers.size === 2 && this.pinch) {
         this.pointers.set(e.pointerId, { x: px, y: py })
@@ -468,71 +309,66 @@ export class MapView {
         const cy = (a.y + b.y) / 2
         this.view.cx -= (cx - this.pinch.cx) / this.view.scale
         this.view.cy += (cy - this.pinch.cy) / this.view.scale
-        if (this.pinch.d > 0 && d > 0) zoomAt(cx, cy, d / this.pinch.d)
+        if (this.pinch.d > 0 && d > 0) this.zoomBy(d / this.pinch.d, cx, cy)
         this.pinch = { d, cx, cy }
         return
       }
-      if (prev && this.dragStart) {
-        if (!this.dragStart.moved && Math.hypot(px - this.dragStart.x, py - this.dragStart.y) > 4 * this.dpr) this.dragStart.moved = true
-        if (this.dragStart.moved) {
+      const d = this.drag
+      if (d && prev) {
+        if (!d.moved && Math.hypot(px - d.x, py - d.y) > 4 * this.dpr) {
+          d.moved = true
+          if (d.mode === 'pending') {
+            // Pendant une commande qui attend un point, ou au doigt : glisser déplace la vue.
+            const wantsPoint = this.editor.busy && !this.editor.promptText.startsWith('Sélectionnez')
+            d.mode = wantsPoint || e.pointerType === 'touch' ? 'pan' : 'window'
+          }
+        }
+        if (d.moved && d.mode === 'pan') {
           this.view.cx -= (px - prev.x) / this.view.scale
           this.view.cy += (py - prev.y) / this.view.scale
           this.onViewChange()
         }
+        if (d.mode === 'window') this.windowRect = [d.x, d.y, px, py]
         this.pointers.set(e.pointerId, { x: px, y: py })
       }
       const w = this.toWorld(px, py)
-      this.cursor = this.tool === 'select' ? { x: w[0], y: w[1], kind: 'libre' } : this.snapAt(w[0], w[1])
-      this.onCursor(this.cursor.x, this.cursor.y, this.cursor)
-      if (this.tool !== 'select' && this.measure.length) this.onMeasure()
+      const snap = this.editor.onMove(w)
+      const cur = this.editor.cursor ?? w
+      this.onCursor(cur[0], cur[1], snap)
+      this.schedule()
+    })
+    cv.addEventListener('pointerleave', () => {
+      this.hover = null
       this.schedule()
     })
     const up = (e: PointerEvent) => {
       const [px, py] = pos(e)
-      const wasDrag = this.dragStart?.moved
+      const d = this.drag
       this.pointers.delete(e.pointerId)
       if (this.pointers.size < 2) this.pinch = null
-      if (this.pointers.size === 0) {
-        this.dragStart = null
-        if (!wasDrag && e.type === 'pointerup') this.click(px, py)
+      if (this.pointers.size > 0) return
+      this.drag = null
+      if (!d || e.type === 'pointercancel') {
+        this.windowRect = null
+        this.schedule()
+        return
       }
+      const w = this.toWorld(px, py)
+      if (d.mode === 'window' && this.windowRect) {
+        const a = this.toWorld(d.x, d.y)
+        this.editor.onWindow([Math.min(a[0], w[0]), Math.min(a[1], w[1]), Math.max(a[0], w[0]), Math.max(a[1], w[1])], px < d.x)
+        this.windowRect = null
+      } else if (d.mode === 'grip') {
+        if (d.moved) this.editor.endGrip()
+      } else if (d.mode === 'gripclick') {
+        this.editor.endGrip()
+      } else if (d.mode === 'pending' && !d.moved) {
+        this.editor.onMove(w)
+        this.editor.onClick(w, e.shiftKey)
+      }
+      this.schedule()
     }
     cv.addEventListener('pointerup', up)
     cv.addEventListener('pointercancel', up)
-    cv.addEventListener('dblclick', () => {
-      if (this.tool !== 'select' && this.measure.length >= 4) {
-        this.measureDone = true
-        this.onMeasure()
-        this.schedule()
-      }
-    })
-    cv.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        this.measure = []
-        this.measureDone = false
-        this.project.select(null)
-        this.onMeasure()
-        this.schedule()
-      }
-    })
-  }
-
-  private click(px: number, py: number): void {
-    const w = this.toWorld(px, py)
-    if (this.tool === 'select') {
-      this.project.select(this.pick(w[0], w[1]))
-      return
-    }
-    if (this.measureDone) {
-      this.measure = []
-      this.measureDone = false
-    }
-    const s = this.snapAt(w[0], w[1])
-    const n = this.measure.length
-    // Un double-clic produit deux clics au même endroit : on n'ajoute pas le point deux fois.
-    if (n >= 2 && this.measure[n - 2] === s.x && this.measure[n - 1] === s.y) return
-    this.measure.push(s.x, s.y)
-    this.onMeasure()
-    this.schedule()
   }
 }

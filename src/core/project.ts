@@ -18,25 +18,18 @@ export interface Item {
   error?: string
 }
 
-export interface Selection {
-  item: Item
-  /** Index de l'entité dans `item.ds.entities`. */
-  entity: number
-}
-
-type Listener = (what: 'data' | 'view' | 'selection') => void
+type Listener = (what: 'data' | 'view') => void
 
 export class Project {
   /** Système de coordonnées du projet (null : coordonnées locales, pas de fond de carte). */
   crs: string | null = null
   items: Item[] = []
-  selection: Selection | null = null
   private listeners: Listener[] = []
 
   on(fn: Listener): void {
     this.listeners.push(fn)
   }
-  emit(what: 'data' | 'view' | 'selection'): void {
+  emit(what: 'data' | 'view'): void {
     for (const fn of this.listeners) fn(what)
   }
 
@@ -78,7 +71,6 @@ export class Project {
     item.dl = dl
     item.error = error
     item.vis = layerVisibility(dl, item.ds)
-    if (this.selection?.item === item) this.selection = null
     this.emit('data')
   }
 
@@ -89,7 +81,6 @@ export class Project {
 
   remove(item: Item): void {
     this.items = this.items.filter((i) => i !== item)
-    if (this.selection?.item === item) this.selection = null
     if (!this.items.length) this.crs = null
     this.emit('data')
   }
@@ -103,7 +94,6 @@ export class Project {
       item.error = error
       item.vis = layerVisibility(dl, item.ds)
     }
-    this.selection = null
     this.emit('data')
   }
 
@@ -115,10 +105,6 @@ export class Project {
     this.rebuild(item)
   }
 
-  select(sel: Selection | null): void {
-    this.selection = sel
-    this.emit('selection')
-  }
 
   /** Emprise des jeux visibles, dans le système du projet. */
   extent(): Extent | null {

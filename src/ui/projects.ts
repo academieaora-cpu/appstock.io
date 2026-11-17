@@ -15,6 +15,8 @@ export interface ProjectHost {
   setView(v: ViewState | null): void
   /** Nom du projet en cours (modifiable par l'utilisateur). */
   name: string
+  getDoc(): unknown
+  setDoc(doc: unknown): void
 }
 
 const when = (t: number | string) => new Date(t).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })
@@ -23,6 +25,7 @@ const size = (n: number) => (n > 1048576 ? (n / 1048576).toFixed(1) + ' Mo' : Ma
 export function openSnapshot(host: ProjectHost, bytes: Uint8Array): void {
   const r = restoreSnapshot(bytes, host.project)
   host.name = r.name
+  if (r.doc) host.setDoc(r.doc)
   host.setView(r.view)
 }
 
@@ -33,7 +36,7 @@ export function makeAutosave(host: ProjectHost): () => void {
     clearTimeout(timer)
     timer = window.setTimeout(() => {
       const p = host.project
-      const action = p.items.length ? saveLocal(AUTOSAVE_ID, host.name || 'Travail en cours', takeSnapshot(p, host.getView(), host.name || 'Travail en cours')) : deleteLocal(AUTOSAVE_ID)
+      const action = p.items.length ? saveLocal(AUTOSAVE_ID, host.name || 'Travail en cours', takeSnapshot(p, host.getView(), host.name || 'Travail en cours', host.getDoc())) : deleteLocal(AUTOSAVE_ID)
       action.catch(() => {
         /* stockage indisponible (navigation privée…) : le travail reste en mémoire */
       })
@@ -57,7 +60,7 @@ export function openProjectsDialog(host: ProjectHost): void {
   const body = h('div', { class: 'content' })
   const close = modal('Projets — reprendre son travail plus tard', body, { wide: true })
   const hasWork = () => host.project.items.length > 0
-  const snapshot = () => takeSnapshot(host.project, host.getView(), host.name || 'Projet')
+  const snapshot = () => takeSnapshot(host.project, host.getView(), host.name || 'Projet', host.getDoc())
 
   const nameInput = h('input', { type: 'text', value: host.name, placeholder: 'Nom du projet', oninput: () => (host.name = nameInput.value.trim()) })
   const localList = h('div')
