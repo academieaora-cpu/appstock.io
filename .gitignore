@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Application web
+node_modules/
+dist/
+public/plugins/dwg-libredwg/
+test-results/
