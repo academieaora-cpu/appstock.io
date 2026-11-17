@@ -2,6 +2,8 @@
 
 Plateforme web pour la topographie et la géomatique : ouvrir des plans DWG et DXF, les superposer à des données SIG, générer un plan à partir d'un fichier de points et l'imprimer en PDF à l'échelle — le tout dans le navigateur, sans installation. « AppStock Géo » est un nom de travail.
 
+**En ligne : https://appstock-geo.vercel.app**
+
 **Prototype.** L'analyse complète, les limites et la feuille de route sont dans [`docs/SYNTHESE.md`](docs/SYNTHESE.md).
 
 ## Ce que fait le prototype
@@ -47,10 +49,13 @@ La lecture du DWG repose sur LibreDWG (GPL-3.0), compilé en WebAssembly. Il est
 
 ## Service en ligne et maintien en vie
 
-L'enregistrement en ligne utilise un projet Supabase (table `geo_projects`, bucket privé `geo-projects`, un dossier par utilisateur, accès limité au propriétaire). Un projet Supabase gratuit est mis en pause après une semaine sans activité ; deux « bips » l'évitent :
+L'enregistrement en ligne utilise un projet Supabase (table `geo_projects`, bucket privé `geo-projects`, un dossier par utilisateur, accès limité au propriétaire). Un projet Supabase gratuit est mis en pause après une semaine sans activité ; trois « bips » indépendants l'évitent, chacun par une requête vide (`geo_ping`) :
 
-- l'application envoie, au plus une fois toutes les 12 heures, une requête vide (`geo_ping`) ;
-- la tâche planifiée [`.github/workflows/keepalive.yml`](.github/workflows/keepalive.yml) fait de même deux fois par jour, même si personne ne se connecte. Elle ne s'exécute que depuis la branche par défaut du dépôt.
+- **Vercel**, chaque jour : [`api/keepalive.js`](api/keepalive.js), planifié dans [`vercel.json`](vercel.json). Ne dépend ni des visites ni de l'activité du dépôt.
+- **GitHub**, deux fois par jour : [`.github/workflows/keepalive.yml`](.github/workflows/keepalive.yml). GitHub suspend les tâches planifiées d'un dépôt public après 60 jours sans activité : c'est pourquoi le bip Vercel existe aussi.
+- **L'application**, à chaque visite, au plus une fois toutes les 12 heures.
+
+Hébergement : projet Vercel `appstock-geo`, construit depuis ce dépôt public.
 
 ## Limites connues
 

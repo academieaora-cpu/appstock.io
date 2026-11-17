@@ -154,7 +154,7 @@ Trois niveaux, du plus privé au plus partagé :
 
 Le service en ligne est le projet Supabase « geometre-topo ». Ont été ajoutés, sans toucher aux tables existantes : la table `geo_projects`, le bucket privé `geo-projects` (50 Mo par fichier, un dossier par utilisateur) et la fonction `geo_ping`. Chaque utilisateur n'accède qu'à ses propres projets (règles de sécurité au niveau des lignes). Le serveur est dans la région `us-east-1` (États-Unis) : à considérer pour des données foncières.
 
-**Maintien en vie.** Supabase met en pause un projet gratuit après une semaine sans activité — c'est l'état actuel de votre autre projet, « academieaora-cpu's Project ». Deux « bips » l'évitent pour « geometre-topo » : l'application en envoie un à l'ouverture (au plus un par 12 heures, sans aucune donnée), et une tâche planifiée GitHub en envoie deux par jour même sans visiteur. Cette tâche ne s'exécutera qu'une fois le code fusionné dans la branche par défaut du dépôt.
+**Maintien en vie.** Supabase met en pause un projet gratuit après une semaine sans activité — c'est l'état actuel de votre autre projet, « academieaora-cpu's Project ». Trois « bips » indépendants l'évitent pour « geometre-topo » : une tâche quotidienne hébergée par Vercel, une tâche GitHub deux fois par jour, et l'application à chaque visite (au plus une fois toutes les 12 heures). Les deux premiers ont été déclenchés et vérifiés le 17/11/2026 : réponse 200, requête visible dans les journaux Supabase.
 
 À savoir : selon le réglage du projet Supabase, la création d'un compte peut exiger de confirmer l'adresse par courriel, et l'envoi de courriels est limité sur l'offre gratuite.
 
