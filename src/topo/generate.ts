@@ -92,7 +92,7 @@ export interface PlanResult {
 const black = (c: number): Color => (c === 0x000000 ? FOREGROUND : c)
 
 /** Blocs de symboles, dessinés en millimètres papier (mis à l'échelle à l'insertion). */
-function symbolBlock(name: SymbolName): Block {
+export function symbolBlock(name: SymbolName): Block {
   const e: Entity[] = []
   const b = { layer: '0', color: BYBLOCK }
   const line = (x1: number, y1: number, x2: number, y2: number) => e.push({ t: 'line', ...b, x1, y1, x2, y2 })
@@ -126,6 +126,21 @@ function symbolBlock(name: SymbolName): Block {
       break
   }
   return { name: 'SYM_' + name.toUpperCase(), bx: 0, by: 0, entities: e }
+}
+
+/**
+ * Bloc de point topographique repris de Covadis (TCPOINT) : un point et trois définitions
+ * d'attributs, MAT (matricule) sur TopoMat, ALT (altitude) et COD (code) sur TopoAlt.
+ */
+export function tcpointBlock(): Block {
+  const attdef = (tag: string, layer: string, x: number, y: number, ha: 0 | 2, va: 0 | 3): EText => ({ t: 'text', layer, color: -1, x, y, h: 0.75, rot: 0, text: '', ha, va, tag })
+  return {
+    name: 'TCPOINT',
+    bx: 0,
+    by: 0,
+    entities: [{ t: 'point', layer: '0', color: BYBLOCK, x: 0, y: 0 }],
+    attdefs: [attdef('MAT', 'TopoMat', 0.25, 0.25, 0, 0), attdef('ALT', 'TopoAlt', 0.25, -0.25, 0, 3), attdef('COD', 'TopoAlt', -0.25, -0.25, 2, 3)],
+  }
 }
 
 const isBorneName = (id: string) => /^B[.\s-]?\d+[A-Za-z]?$/i.test(id.trim())
@@ -183,14 +198,7 @@ export function generatePlan(input: SurveyPoint[], rules: CodeRule[], options: P
   const lMat = L('TopoMat', FOREGROUND)
   const lAlt = L('TopoAlt', 0x009a00)
   const s500 = options.scale / 500 // échelle d'insertion des blocs (1 pour un plan au 1/500)
-  const attdef = (tag: string, layer: string, x: number, y: number, ha: 0 | 2, va: 0 | 3): EText => ({ t: 'text', layer, color: -1, x, y, h: 0.75, rot: 0, text: '', ha, va, tag })
-  ds.blocks.set('TCPOINT', {
-    name: 'TCPOINT',
-    bx: 0,
-    by: 0,
-    entities: [{ t: 'point', layer: '0', color: BYBLOCK, x: 0, y: 0 }],
-    attdefs: [attdef('MAT', lMat, 0.25, 0.25, 0, 0), attdef('ALT', lAlt, 0.25, -0.25, 0, 3), attdef('COD', lAlt, -0.25, -0.25, 2, 3)],
-  })
+  ds.blocks.set('TCPOINT', tcpointBlock())
 
   const text = (layer: string, x: number, y: number, mm: number, str: string, extra: Partial<EText> = {}): EText => ({
     t: 'text',
