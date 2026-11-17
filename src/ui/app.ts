@@ -13,7 +13,7 @@ import { MapView, type Tool } from '../render/mapview'
 import { formatArea } from '../topo/sheet'
 import { openAssistant } from './assistant'
 import { clear, field, h, modal, select, toast } from './dom'
-import { ping } from '../cloud/cloud'
+import { ping } from '../cloud/ping'
 import { openPrintDialog } from './print'
 import { findAutosave, makeAutosave, openProjectsDialog, openSnapshot, type ProjectHost } from './projects'
 
