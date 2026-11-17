@@ -81,14 +81,21 @@ describe('mise en page camerounaise', () => {
     texts.length = 0
     drawSheet(p, spec, content)
     const g = sheetGeometry(spec, content.extent)
-    const n = texts.find((t) => t.s === 'N' && t.y < g.map.y + 30)!
+    const n = texts.find((t) => t.s === 'N' && t.y < g.map.y)!
     expect(Math.abs(n.x - (g.map.x + g.map.w / 2))).toBeLessThan(6)
-    expect(texts.some((t) => t.s === 'PLAN DE SITUATION')).toBe(true)
-    expect(texts.some((t) => t.s === 'Echelle : 1/500')).toBe(true)
+    expect(Math.abs(n.x - (g.frame.x + g.frame.w / 2))).toBeLessThan(0.01)
+    expect(texts.some((t) => t.s.startsWith('Plan de Situation - Echelle 1/10'))).toBe(true)
+    expect(texts.some((t) => t.s === 'Emplacement')).toBe(true)
+    expect(texts.some((t) => t.s === 'Echelle: 1/500')).toBe(true)
+    // Plan de situation : moitié droite du bandeau, sur toute sa hauteur
+    expect(g.situation!.image.x).toBeCloseTo(g.frame.x + g.frame.w / 2, 6)
+    expect(g.situation!.image.x + g.situation!.image.w).toBeCloseTo(g.frame.x + g.frame.w, 6)
+    expect(g.situation!.caption.y + g.situation!.caption.h).toBeCloseTo(g.frame.y + g.band, 6)
     // Plus de graduations de barre d'échelle (« 0 », « 25 m »…)
     expect(texts.some((t) => t.s === '0' || / m$/.test(t.s))).toBe(false)
     expect(texts.some((t) => t.s === 'S1')).toBe(true)
     expect(texts.some((t) => t.s === '783640.123')).toBe(true)
-    expect(texts.some((t) => t.s === 'Région : Centre')).toBe(true)
+    expect(texts.some((t) => t.s === 'Région: Centre')).toBe(true)
+    expect(texts.some((t) => t.s === 'MAT')).toBe(true)
   })
 })

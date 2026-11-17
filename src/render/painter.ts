@@ -8,6 +8,9 @@ import type { DisplayList, TextPrim } from './scene'
 
 export type RGB = [number, number, number]
 
+/** Famille de caractères : linéale (par défaut) ou à empattement (en-têtes officiels). */
+export type TextFamily = 'sans' | 'serif' | 'serif-italic'
+
 export interface Painter {
   beginStroke(color: RGB, width: number, dash?: number[]): void
   moveTo(x: number, y: number): void
@@ -22,9 +25,9 @@ export interface Painter {
    * `rot` en radians, sens trigonométrique ; ha 0/1/2 = gauche/centre/droite ;
    * va 0/1/2/3 = ligne de base/bas/milieu/haut.
    */
-  text(x: number, y: number, capHeight: number, rot: number, text: string, ha: number, va: number, color: RGB, bold?: boolean): void
+  text(x: number, y: number, capHeight: number, rot: number, text: string, ha: number, va: number, color: RGB, bold?: boolean, family?: TextFamily): void
   /** Largeur d'un texte d'une ligne, dans l'unité de la cible. */
-  textWidth(text: string, capHeight: number, bold?: boolean): number
+  textWidth(text: string, capHeight: number, bold?: boolean, family?: TextFamily): number
   save(): void
   clipRect(x: number, y: number, w: number, h: number): void
   restore(): void
@@ -186,6 +189,9 @@ export function drawText(p: Painter, t: TextPrim, v: View, o: Pick<DrawOptions, 
 
 /** Rapport hauteur des majuscules / corps de la police (Arial, Helvetica). */
 export const CAP_RATIO = 0.716
+/** Même rapport pour Times. */
+export const CAP_RATIO_SERIF = 0.662
+const SERIF_STACK = '"Times New Roman", Times, "Liberation Serif", serif'
 /** Interligne des textes multilignes, en hauteurs de texte. */
 export const LINE_SPACING = 1.6
 
@@ -237,13 +243,17 @@ export class CanvasPainter implements Painter {
     c.arc(x, y, radius, 0, Math.PI * 2)
     c.fill()
   }
-  text(x: number, y: number, capHeight: number, rot: number, text: string, ha: number, va: number, color: RGB, bold?: boolean): void {
+  private css(capHeight: number, bold?: boolean, family?: TextFamily): string {
+    const serif = family === 'serif' || family === 'serif-italic'
+    const em = capHeight / (serif ? CAP_RATIO_SERIF : CAP_RATIO)
+    return `${family === 'serif-italic' ? 'italic ' : ''}${bold ? 'bold ' : ''}${em}px ${serif ? SERIF_STACK : this.font}`
+  }
+  text(x: number, y: number, capHeight: number, rot: number, text: string, ha: number, va: number, color: RGB, bold?: boolean, family?: TextFamily): void {
     const c = this.ctx
-    const em = capHeight / CAP_RATIO
     c.save()
     c.translate(x, y)
     if (rot) c.rotate(-rot)
-    c.font = `${bold ? 'bold ' : ''}${em}px ${this.font}`
+    c.font = this.css(capHeight, bold, family)
     c.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`
     c.textAlign = ha === 1 ? 'center' : ha === 2 ? 'right' : 'left'
     c.textBaseline = 'alphabetic'
@@ -259,8 +269,8 @@ export class CanvasPainter implements Painter {
     for (let i = 0; i < lines.length; i++) c.fillText(lines[i], 0, y0 + i * step)
     c.restore()
   }
-  textWidth(text: string, capHeight: number, bold?: boolean): number {
-    this.ctx.font = `${bold ? 'bold ' : ''}${capHeight / CAP_RATIO}px ${this.font}`
+  textWidth(text: string, capHeight: number, bold?: boolean, family?: TextFamily): number {
+    this.ctx.font = this.css(capHeight, bold, family)
     return this.ctx.measureText(text).width
   }
   save(): void {

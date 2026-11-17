@@ -11,6 +11,7 @@ import { closedRing } from '../edit/ops'
 import { toProjectFn, type Selection } from '../edit/query'
 import { pointsFromSelection } from '../edit/selpoints'
 import { computeParcel, type Parcel } from '../topo/generate'
+import { crossings } from '../topo/parcel'
 import type { MapView } from '../render/mapview'
 import { CanvasPainter } from '../render/painter'
 import { retrySituations, situationMap, situationReady, type SituationMap, type SituationProvider, type SituationRequest } from '../render/situation'
@@ -187,8 +188,34 @@ export function defaultDoc(project: Project): DocSettings {
     showSituation: true,
     situationScale: 10000,
     situationProvider: 'osm',
+    situationCaption: 'echelle',
+    showEmplacement: true,
+    showBorder: true,
+    coordDecimals: 3,
     tableRows: null,
   }
+}
+
+/** Cases à cocher des éléments de la feuille, placées au-dessus de l'aperçu. */
+export function sheetToggles(doc: DocSettings, refresh: () => void): HTMLElement {
+  const c = (label: string, value: boolean, set: (v: boolean) => void) =>
+    checkbox(label, value, (v) => {
+      set(v)
+      refresh()
+    })
+  return h(
+    'div',
+    { class: 'sheet-toggles' },
+    c('Nord', doc.showNorth, (v) => (doc.showNorth = v)),
+    c('Plan de situation', doc.showSituation !== false, (v) => (doc.showSituation = v)),
+    c('Emplacement', doc.showEmplacement !== false, (v) => (doc.showEmplacement = v)),
+    c('Superficie', doc.showArea, (v) => (doc.showArea = v)),
+    c('Tableau des coordonnées', doc.showTable, (v) => (doc.showTable = v)),
+    c('Légende', doc.showLegend, (v) => (doc.showLegend = v)),
+    c('Croisillons', doc.showGrid, (v) => (doc.showGrid = v)),
+    c('Cadre extérieur', doc.showBorder !== false, (v) => (doc.showBorder = v)),
+    c('Noir et blanc', doc.monochrome, (v) => (doc.monochrome = v)),
+  )
 }
 
 /** Rédige le titre, le bénéficiaire et la référence à partir du type et des renseignements. */
@@ -248,6 +275,8 @@ export function inferParcel(project: Project): Parcel | null {
     const p = toP(x, y)
     vertices.push({ label, x: p[0], y: p[1] })
   }
+  // Un contour qui se croise n'a pas de superficie : pas de parcelle plutôt qu'un chiffre faux.
+  if (crossings(vertices.map((v) => ({ id: v.label, x: v.x, y: v.y }))).length) return null
   return computeParcel(vertices)
 }
 
@@ -288,7 +317,9 @@ export function situationRequest(project: Project, doc: DocSettings, content: Sh
   if (!ll) return 'Position géographique impossible à calculer'
   const ring = pts && pts.length >= 3 ? (pts.map((p) => toLonLat(project.crs, p.x, p.y)).filter(Boolean) as [number, number][]) : null
   const g = sheetGeometry(doc, content.extent)
-  const { image } = situationRect(g)
+  const sr = situationRect(g)
+  if (!sr) return 'Pas de plan de situation pour ce modèle'
+  const { image } = sr
   const provider = doc.situationProvider ?? 'osm'
   return { lon: ll[0], lat: ll[1], ring, widthMm: image.w, heightMm: image.h, scale: doc.situationScale ?? 10000, provider, googleKey: provider === 'google' ? googleKey() : undefined }
 }
@@ -319,6 +350,10 @@ export function useSelectionForTable(project: Project, doc: DocSettings, sel: Se
 /** Réglages communs (assistant et mise en page) : tableau des coordonnées. */
 export function tableSection(project: Project, doc: DocSettings, refresh: () => void): HTMLElement {
   const box = h('div', { class: 'note' })
+  const decimals = field('Décimales des coordonnées', select([['0', '0'], ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4']], String(doc.coordDecimals ?? 3), (v) => {
+    doc.coordDecimals = Number(v)
+    refresh()
+  }), 'Par défaut, celles du fichier de points.')
   const draw = () => {
     const n = doc.tableRows?.length ?? 0
     const selCount = docHooks.selection().length
@@ -351,7 +386,7 @@ export function tableSection(project: Project, doc: DocSettings, refresh: () => 
     )
   }
   draw()
-  return box
+  return h('div', null, box, decimals)
 }
 
 /** Réglages communs : encart du plan de situation. */
@@ -385,6 +420,10 @@ export function situationSection(doc: DocSettings, refresh: () => void): HTMLEle
         doc.situationProvider = v as SituationProvider
         refresh()
       })),
+      field('Légende', select([['echelle', 'Avec l’échelle'], ['sans', '« Sans Echelle »']], doc.situationCaption ?? 'echelle', (v) => {
+        doc.situationCaption = v as 'echelle' | 'sans'
+        refresh()
+      })),
     ),
     provider === 'google'
       ? h('div', null, field('Clé Google Maps', key, 'Créée dans la console Google Cloud (API « Maps Static »), limitée à l’adresse de la plateforme. Gardée sur cet appareil uniquement.'))
@@ -411,7 +450,7 @@ export function fillExample(doc: DocSettings): void {
     lieuDit: 'Mimboman',
     enteteGauche: 'ORDRE NATIONAL DES GEOMETRES\nDU CAMEROUN\nCabinet EXEMPLE - Géomètre Expert\nAgrément n° 000/EXEMPLE',
     geometre: 'Cabinet EXEMPLE, Géomètre Expert',
-    mentions: 'Coordonnées rattachées au réseau géodésique national',
+    mentions: 'Mappe de repérage\nFeuille 1/20000\nccp n°.........',
   })
   Object.assign(doc.meta, { tf: '0000/MFOUNDI', demandeur: 'M. EXEMPLE Paul', proprietaire: 'Mme EXEMPLE Marie', bloc: '1', lots: '6 et 7' })
   doc.showSituation = true
@@ -489,7 +528,9 @@ export function openDocumentWizard(project: Project, doc: DocSettings, onApply: 
     return el
   }
 
+  const togglesHost = h('div')
   const build = () => {
+    togglesHost.replaceChildren(sheetToggles(draft, redraw))
     const type = DOC_TYPES.find((t) => t.id === draft.type) ?? DOC_TYPES[0]
     const cards = h('div', { class: 'type-grid' })
     for (const t of DOC_TYPES) {
@@ -550,7 +591,7 @@ export function openDocumentWizard(project: Project, doc: DocSettings, onApply: 
             draft.template === 'cameroun' ? h('div', { class: 'row' }, info('enteteGauche', 'En-tête gauche (ministère, ordre, cabinet, agrément)', 3)) : '',
             h('h3', null, '4 · Titre (rédigé automatiquement, modifiable ensuite dans la mise en page)'),
             h('pre', { class: 'title-preview' }, (type.title(draft.meta) + '\n' + type.beneficiaire(draft.meta)).trim()),
-            h('div', { class: 'row' }, checkbox('Tableau des coordonnées', draft.showTable, (v) => set({ showTable: v })), checkbox('Légende', draft.showLegend, (v) => set({ showLegend: v })), checkbox('Superficie', draft.showArea, (v) => set({ showArea: v })), checkbox('Croisillons', draft.showGrid, (v) => set({ showGrid: v })), checkbox('Nord', draft.showNorth, (v) => set({ showNorth: v }))),
+            h('h3', null, 'Tableau des coordonnées'),
             tableSection(project, draft, redraw),
             h('h3', null, '5 · Plan de situation'),
             situationSection(draft, () => {
@@ -578,6 +619,7 @@ export function openDocumentWizard(project: Project, doc: DocSettings, onApply: 
       h(
         'div',
         null,
+        togglesHost,
         h('div', { class: 'preview' }, canvas),
         fitBox,
         h(

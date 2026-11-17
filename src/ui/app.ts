@@ -177,6 +177,10 @@ export function startApp(root: HTMLElement): void {
     if (r.landscape !== undefined) doc.landscape = r.landscape
     if (r.showTable !== undefined) doc.showTable = r.showTable
     if (r.showLegend !== undefined) doc.showLegend = r.showLegend
+    // Nouveau plan : précision des coordonnées du fichier, tableau = bornes validées.
+    doc.coordDecimals = r.coordDecimals
+    doc.tableRows = null
+    doc.tableIsParcel = false
     doc.type = r.plan.parcel ? 'bornage' : r.plan.tin ? 'topo_alti' : 'topo'
     doc.template = 'cameroun'
     view.fit()
@@ -213,7 +217,7 @@ export function startApp(root: HTMLElement): void {
     } }),
     ui({ id: 'PROJETS', label: 'Projets (enregistrer, rouvrir)…', aliases: ['PROJ', 'ENREG'], menu: 'Fichier', ribbon: ['Mise en page', 'Fichier'], icon: 'projects', tip: 'Enregistre le travail sur l’appareil, dans un fichier .geoprojet ou en ligne dans votre compte, et rouvre un projet.', run: () => openProjectsDialog(host) }),
     ui({ id: 'EXPORTER', label: 'Exporter (DXF, GeoJSON, KML, CSV)…', aliases: ['EXP', 'EXPORT'], menu: 'Fichier', ribbon: ['Mise en page', 'Fichier'], icon: 'export', tip: 'Enregistre le dessin en DXF (AutoCAD, Covadis), GeoJSON, KML ou CSV de points.', run: () => openExport() }),
-    ui({ id: 'SEMIS', label: 'Charger un semis de points / plan automatique…', aliases: ['ASSISTANT', 'CHARGPNT'], menu: 'Topo 2D', ribbon: ['Topographie', 'Points'], icon: 'assistant', tip: 'Lit un fichier de points (TXT, CSV, XYZ), contrôle les données, interprète les codes terrain et dessine le plan automatiquement.', steps: ['Choisissez le fichier de points (ou le levé d’exemple).', 'Vérifiez les colonnes reconnues, les anomalies et les codes.', 'Réglez les options du semis (décimales, 2D/3D, symboles, décalage) et du plan, ou décrivez-le en une phrase.', 'Cliquez « Analyser et générer mon plan ».'], run: () => openAssistant(project, null, afterPlan) }),
+    ui({ id: 'SEMIS', label: 'Charger un semis de points / plan automatique…', aliases: ['ASSISTANT', 'CHARGPNT'], menu: 'Topo 2D', ribbon: ['Topographie', 'Points'], icon: 'assistant', tip: 'Lit un fichier de points (TXT, CSV, XYZ), contrôle les données, interprète les codes terrain et dessine le plan automatiquement.', steps: ['Choisissez le fichier de points (ou le levé d’exemple) et vérifiez les colonnes reconnues.', 'Nettoyage : pour chaque point suspect (doublon, coordonnée nulle, point isolé, altitude aberrante), gardez, excluez ou ignorez l’altitude, puis validez.', 'Codes : attribuez chaque code du fichier (borne, bâtiment, clôture, route…, ou « ne pas dessiner ») puis validez ; rien n’est dessiné avant.', 'Parcelle : choisissez l’ordre de parcours des bornes (contour sans croisement, B.1 au nord puis sens horaire, ou vos numéros) ; la superficie s’affiche.', 'Réglez les options du plan puis cliquez « Générer mon plan ».'], run: () => openAssistant(project, null, afterPlan) }),
     ui({ id: 'NOUVEAUPLAN', label: 'Nouveau plan (type, format, renseignements)…', aliases: ['DOCUMENT', 'PLAN'], menu: 'Édition plan', ribbon: ['Mise en page', 'Plan'], icon: 'doc', tip: 'Choisit le type de document (bornage, état des lieux, croquis…), le format, l’échelle et les renseignements ; le titre est rédigé automatiquement.', steps: ['Choisissez le type de document.', 'Choisissez le format, l’orientation et l’échelle.', 'Renseignez date, demandeur, propriétaire, T.F., lieu, géomètre.', 'Validez : le cadre de la feuille apparaît dans le dessin.'], run: () => askDocument() }),
     ui({ id: 'CADRE', label: 'Déplacer le cadre de la feuille', aliases: ['CF'], menu: 'Édition plan', ribbon: ['Mise en page', 'Plan'], icon: 'frame', tip: 'Cale la feuille sur la partie du dessin à imprimer.', steps: ['Le cadre de la feuille suit le curseur.', 'Cliquez le nouveau centre.'], async run(e) {
       doc.showFrame = true
@@ -500,7 +504,7 @@ export function startApp(root: HTMLElement): void {
       const plan = project.items.find((i) => i.plan)?.plan
       if (plan) {
         rightBody.append(h('h3', null, 'Compte rendu du plan généré'))
-        for (const r of plan.report) rightBody.append(h('div', { class: 'note ' + (r.level === 'ok' ? 'ok' : r.level === 'alerte' ? 'warn' : '') }, r.message))
+        for (const r of plan.report) rightBody.append(h('div', { class: 'note ' + (r.level === 'ok' ? 'ok' : r.level === 'alerte' ? 'warn' : r.level === 'erreur' ? 'err' : '') }, r.message))
         if (plan.parcel) rightBody.append(kv([['Superficie', `${plan.parcel.area.toFixed(2)} m² (${formatArea(plan.parcel.area)})`], ['Périmètre', plan.parcel.perimeter.toFixed(2) + ' m']]))
       }
       rightBody.append(h('h3', null, 'Document'), kv([['Type', doc.type === 'libre' ? 'Dessin libre' : doc.info.titre.split('\n')[0] || doc.type], ['Feuille', `${doc.paper} ${doc.landscape ? 'paysage' : 'portrait'}`], ['Échelle', '1/' + doc.scale]]), h('div', { class: 'actions' }, h('button', { onclick: () => askDocument() }, 'Nouveau plan…'), h('button', { class: 'primary', onclick: printDialog }, 'Mise en page / PDF')))

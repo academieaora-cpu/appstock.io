@@ -217,3 +217,11 @@ dialog.modal > .content { padding: 12px 16px 16px; overflow-y: auto; max-height:
 .combo { display: flex; flex-direction: column; gap: 4px; }
 .combo select, .combo input { width: 100%; }
 .situation-row { align-items: center; }
+.parcel-choices { display: grid; gap: 6px; margin: 6px 0; }
+.parcel-choice { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.parcel-choice.sel { border-color: var(--accent); background: rgba(80, 140, 255, 0.08); }
+.parcel-choice small { color: var(--muted); }
+.parcel-view { display: grid; grid-template-columns: 260px 1fr; gap: 12px; align-items: start; }
+.parcel-preview { width: 260px; height: 260px; background: #1b1f26; border-radius: 6px; }
+@media (max-width: 700px) { .parcel-view { grid-template-columns: 1fr; } }
+.sheet-toggles { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--chrome-2); }

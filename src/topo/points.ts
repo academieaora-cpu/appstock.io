@@ -368,3 +368,94 @@ export function checkPoints(file: PointsFile): QualityReport {
   }
   return { anomalies, count: pts.length, withZ: withZ.length, extent: pts.length ? [minX, minY, maxX, maxY] : [0, 0, 0, 0], zRange }
 }
+
+// ---------------------------------------------------------------------------
+// Nettoyage point par point
+// ---------------------------------------------------------------------------
+
+export type CleanAction = 'garder' | 'exclure' | 'sans-altitude'
+
+export interface CleanFlag {
+  /** Indice du point dans `file.points`. */
+  index: number
+  problem: string
+  /** Action proposée ; l'utilisateur décide. */
+  suggestion: CleanAction
+}
+
+/**
+ * Anomalies point par point avec une action proposée : doublons exacts et coordonnées
+ * nulles à exclure, points isolés très loin du levé à exclure, altitudes aberrantes à
+ * ignorer (le point reste en planimétrie). Rien n'est appliqué sans l'accord de l'utilisateur.
+ */
+export function cleaningFlags(points: SurveyPoint[]): CleanFlag[] {
+  const flags: CleanFlag[] = []
+  const add = (index: number, problem: string, suggestion: CleanAction) => flags.push({ index, problem, suggestion })
+  const byPos = new Map<string, number>()
+  const byId = new Map<string, number>()
+  points.forEach((p, i) => {
+    if (p.x === 0 || p.y === 0 || !Number.isFinite(p.x) || !Number.isFinite(p.y)) {
+      add(i, 'Coordonnée nulle ou illisible', 'exclure')
+      return
+    }
+    const key = Math.round(p.x * 1000) + ':' + Math.round(p.y * 1000)
+    const first = byPos.get(key)
+    if (first !== undefined) {
+      const q = points[first]
+      const same = q.id === p.id && q.z === p.z && q.code === p.code
+      add(i, same ? `Doublon exact du point ${q.id} (ligne ${q.line})` : `Même position que le point ${q.id} (ligne ${q.line})`, same ? 'exclure' : 'garder')
+    } else byPos.set(key, i)
+    if (p.id) {
+      const j = byId.get(p.id)
+      if (j !== undefined && first === undefined) add(i, `Identifiant ${p.id} déjà utilisé ligne ${points[j].line}, à une autre position`, 'garder')
+      else if (j === undefined) byId.set(p.id, i)
+    }
+  })
+  const ok = points.filter((p) => p.x !== 0 && p.y !== 0)
+  if (ok.length >= 6) {
+    const mx = median(ok.map((p) => p.x))
+    const my = median(ok.map((p) => p.y))
+    const dist = points.map((p) => Math.hypot(p.x - mx, p.y - my))
+    const md = median(ok.map((p) => Math.hypot(p.x - mx, p.y - my)))
+    const mad = median(ok.map((p) => Math.abs(Math.hypot(p.x - mx, p.y - my) - md))) || md || 1
+    points.forEach((p, i) => {
+      if (p.x === 0 || p.y === 0) return
+      if (dist[i] > md + 8 * mad && dist[i] > 5 * md) add(i, `Très éloigné du levé (${dist[i].toFixed(0)} m du centre) : erreur de saisie possible`, 'exclure')
+    })
+  }
+  const withZ = points.map((p, i) => ({ p, i })).filter(({ p }) => p.z !== null)
+  if (withZ.length >= 3) {
+    const zs = withZ.map(({ p }) => p.z as number)
+    const nonZero = zs.filter((z) => z !== 0)
+    const mz = median(nonZero.length ? nonZero : zs)
+    const madZ = median((nonZero.length ? nonZero : zs).map((z) => Math.abs(z - mz))) || 1
+    for (const { p, i } of withZ) {
+      const z = p.z as number
+      if (z === 0 && nonZero.length) add(i, 'Altitude 0 alors que les autres points en ont une', 'sans-altitude')
+      else if (z <= -9000) add(i, `Altitude de remplissage (${z})`, 'sans-altitude')
+      else if (Math.abs(z - mz) > Math.max(10 * madZ, 30)) add(i, `Altitude ${z} très différente des autres (médiane ${mz.toFixed(2)} m)`, 'sans-altitude')
+    }
+  }
+  return flags
+}
+
+/** Nombre de décimales des coordonnées dans le fichier source (le plus fréquent, 3 par défaut). */
+export function sourceDecimals(file: PointsFile): number {
+  const counts = new Map<number, number>()
+  for (const row of file.rows) {
+    for (const c of [file.columns.x, file.columns.y]) {
+      const cell = row[c]
+      if (!cell) continue
+      const m = /[.,](\d+)\s*$/.exec(cell.trim())
+      const d = m ? m[1].length : 0
+      counts.set(d, (counts.get(d) ?? 0) + 1)
+    }
+  }
+  let best = 3
+  let n = 0
+  for (const [d, k] of counts) if (k > n) {
+    best = d
+    n = k
+  }
+  return Math.min(4, Math.max(0, best))
+}

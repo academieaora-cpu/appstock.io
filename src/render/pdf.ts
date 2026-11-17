@@ -4,7 +4,7 @@
  * traits de vrais traits : le PDF reste net à n'importe quel zoom.
  */
 import { jsPDF } from 'jspdf'
-import { CAP_RATIO, LINE_SPACING, type Painter, type RGB } from './painter'
+import { CAP_RATIO, CAP_RATIO_SERIF, LINE_SPACING, type Painter, type RGB, type TextFamily } from './painter'
 
 const MM_TO_PT = 72 / 25.4
 
@@ -58,13 +58,15 @@ export class PdfPainter implements Painter {
     this.doc.setFillColor(color[0], color[1], color[2])
     this.doc.circle(x, y, radius, 'F')
   }
-  private font(capHeight: number, bold?: boolean): void {
-    this.doc.setFont('helvetica', bold ? 'bold' : 'normal')
-    this.doc.setFontSize((capHeight / CAP_RATIO) * MM_TO_PT)
+  private font(capHeight: number, bold?: boolean, family?: TextFamily): void {
+    const serif = family === 'serif' || family === 'serif-italic'
+    const italic = family === 'serif-italic'
+    this.doc.setFont(serif ? 'times' : 'helvetica', bold ? (italic ? 'bolditalic' : 'bold') : italic ? 'italic' : 'normal')
+    this.doc.setFontSize((capHeight / (serif ? CAP_RATIO_SERIF : CAP_RATIO)) * MM_TO_PT)
   }
-  text(x: number, y: number, capHeight: number, rot: number, text: string, ha: number, va: number, color: RGB, bold?: boolean): void {
+  text(x: number, y: number, capHeight: number, rot: number, text: string, ha: number, va: number, color: RGB, bold?: boolean, family?: TextFamily): void {
     const d = this.doc
-    this.font(capHeight, bold)
+    this.font(capHeight, bold, family)
     d.setTextColor(color[0], color[1], color[2])
     const lines = text.indexOf('\n') >= 0 ? text.split('\n') : [text]
     const step = capHeight * LINE_SPACING
@@ -89,8 +91,8 @@ export class PdfPainter implements Painter {
       else d.text(s, px, py)
     }
   }
-  textWidth(text: string, capHeight: number, bold?: boolean): number {
-    this.font(capHeight, bold)
+  textWidth(text: string, capHeight: number, bold?: boolean, family?: TextFamily): number {
+    this.font(capHeight, bold, family)
     return this.doc.getTextWidth(text)
   }
   save(): void {

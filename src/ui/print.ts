@@ -9,7 +9,7 @@ import { CanvasPainter } from '../render/painter'
 import { PdfPainter, createPdf } from '../render/pdf'
 import { PAPERS, SCALES, drawSheet, fitInfo, paperSize, type SheetContent, type SheetInfo, type SheetSpec, type TemplateName } from '../topo/sheet'
 import { checkbox, field, h, modal, select, toast } from './dom'
-import { docHooks, ensureSituation, sheetContent, situationSection, tableSection, useSelectionForTable, type DocSettings } from './document'
+import { docHooks, ensureSituation, sheetContent, sheetToggles, situationSection, tableSection, useSelectionForTable, type DocSettings } from './document'
 import { territoryFields } from './territoire'
 
 export function renderPdf(spec: SheetSpec, c: SheetContent, title: string): Blob {
@@ -126,8 +126,7 @@ export function openPrintDialog(project: Project, viewExtent: Extent, doc: DocSe
         : h(
             'div',
             null,
-            h('div', { class: 'row' }, checkbox('Croisillons', doc.showGrid, (v) => set({ showGrid: v })), checkbox('Nord', doc.showNorth, (v) => set({ showNorth: v })), checkbox('Légende', doc.showLegend, (v) => set({ showLegend: v }))),
-            h('div', { class: 'row' }, checkbox('Tableau des coordonnées', doc.showTable, (v) => set({ showTable: v })), checkbox('Superficie', doc.showArea, (v) => set({ showArea: v })), checkbox('Noir et blanc', doc.monochrome, (v) => set({ monochrome: v }))),
+            h('h3', null, 'Tableau des coordonnées'),
             tableSection(project, doc, () => {
               redraw()
               onChange()
@@ -202,7 +201,10 @@ export function openPrintDialog(project: Project, viewExtent: Extent, doc: DocSe
         ),
         h('p', { class: 'muted' }, 'PDF vectoriel à l’échelle exacte : imprimez à 100 %, sans « ajuster à la page ».'),
       ),
-      h('div', { class: 'preview' }, canvas),
+      h('div', null, sheetToggles(doc, () => {
+        redraw()
+        onChange()
+      }), h('div', { class: 'preview' }, canvas)),
     ),
   )
   modal('Mise en page et impression PDF', body, { wide: true })

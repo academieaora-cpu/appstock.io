@@ -5,9 +5,10 @@
  */
 import { detectCrs, type CrsCandidate } from '../core/crs'
 import type { Item, Project } from '../core/project'
-import { DEFAULT_RULES, loadRules, saveRules, summarizeCodes, type CodeRule } from '../topo/codes'
+import { DEFAULT_RULES, loadRules, matchCode, normalizeCode, saveRules, summarizeCodes, type CodeRule } from '../topo/codes'
 import { DEFAULT_PLAN, generatePlan, type PlanOptions, type PlanResult } from '../topo/generate'
-import { checkPoints, delimiterName, parsePointsText, type ColumnMap, type PointsFile } from '../topo/points'
+import { parcelProposals, crossings, signedArea, type BorneVertex, type ParcelProposal } from '../topo/parcel'
+import { checkPoints, cleaningFlags, delimiterName, parsePointsText, sourceDecimals, type CleanAction, type ColumnMap, type PointsFile, type SurveyPoint } from '../topo/points'
 import { SCALES } from '../topo/sheet'
 import { checkbox, field, h, modal, select, toast } from './dom'
 
@@ -117,6 +118,61 @@ export interface AssistantResult {
   scale: number
   showTable?: boolean
   showLegend?: boolean
+  /** Décimales des coordonnées du fichier source (pour le tableau des coordonnées). */
+  coordDecimals: number
+}
+
+const IGNORE = '__ignorer'
+const SIMPLE = ''
+
+/** Clé d'un code pour le dictionnaire : sans suffixe numérique (BAT1 → BAT). */
+const codeKey = (raw: string) => normalizeCode(raw).replace(/\d+$/, '') || normalizeCode(raw)
+
+/** Petit aperçu du contour (SVG), bornes nommées, côtés qui se croisent en rouge. */
+function parcelPreview(vertices: BorneVertex[]): SVGSVGElement {
+  const NS = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(NS, 'svg')
+  svg.setAttribute('class', 'parcel-preview')
+  const xs = vertices.map((v) => v.x)
+  const ys = vertices.map((v) => v.y)
+  const x0 = Math.min(...xs)
+  const y1 = Math.max(...ys)
+  const w = Math.max(...xs) - x0 || 1
+  const hh = y1 - Math.min(...ys) || 1
+  const size = 260
+  const k = (size - 60) / Math.max(w, hh)
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`)
+  const P = (v: BorneVertex) => [30 + (v.x - x0) * k, 30 + (y1 - v.y) * k]
+  const bad = new Set(crossings(vertices.map((v) => ({ id: v.label, x: v.x, y: v.y }))).flat())
+  vertices.forEach((v, i) => {
+    const a = P(v)
+    const b = P(vertices[(i + 1) % vertices.length])
+    const l = document.createElementNS(NS, 'line')
+    l.setAttribute('x1', String(a[0]))
+    l.setAttribute('y1', String(a[1]))
+    l.setAttribute('x2', String(b[0]))
+    l.setAttribute('y2', String(b[1]))
+    l.setAttribute('stroke', bad.has(i) ? '#ff5050' : '#e8e8e8')
+    l.setAttribute('stroke-width', '2')
+    svg.append(l)
+  })
+  for (const v of vertices) {
+    const [x, y] = P(v)
+    const c = document.createElementNS(NS, 'circle')
+    c.setAttribute('cx', String(x))
+    c.setAttribute('cy', String(y))
+    c.setAttribute('r', '3.5')
+    c.setAttribute('fill', '#ff3b3b')
+    svg.append(c)
+    const t = document.createElementNS(NS, 'text')
+    t.setAttribute('x', String(x + 5))
+    t.setAttribute('y', String(y - 5))
+    t.setAttribute('fill', '#ffd27a')
+    t.setAttribute('font-size', '12')
+    t.textContent = v.label
+    svg.append(t)
+  }
+  return svg
 }
 
 export function openAssistant(project: Project, source: { name: string; text: string } | null, onDone: (r: AssistantResult) => void): void {
@@ -131,25 +187,138 @@ export function openAssistant(project: Project, source: { name: string; text: st
   let understood: Understood | null = null
   let existing: Item | null = null
   let instructionText = ''
+  // Nettoyage : décision par point (indice dans file.points)
+  let decisions = new Map<number, CleanAction>()
+  let flags: ReturnType<typeof cleaningFlags> = []
+  let cleanValidated = false
+  let extraExcluded = ''
+  // Codes : choix de l'utilisateur par code (clé sans suffixe)
+  let choices = new Map<string, string>()
+  let codesValidated = false
+  // Parcelle
+  let parcelMode = ''
+  let manualOrder = ''
 
   const root = h('div', { class: 'content steps' })
   const close = modal('Assistant de production de plan', root, { wide: true })
 
+  const resetSteps = () => {
+    decisions = new Map()
+    flags = file ? cleaningFlags(file.points) : []
+    for (const f of flags) if (f.suggestion !== 'garder') decisions.set(f.index, f.suggestion)
+    cleanValidated = false
+    choices = new Map()
+    codesValidated = false
+    parcelMode = ''
+    manualOrder = ''
+  }
+
   const reparse = (forced?: Partial<ColumnMap>) => {
     file = raw ? parsePointsText(raw, forced) : null
     confirmed = false
-    if (file?.points.length) {
-      const q = checkPoints(file)
-      candidates = detectCrs(q.extent)
-      crs = candidates.length ? candidates[0].def.code : null
-    }
+    resetSteps()
+    detect()
     render()
+  }
+
+  /** Système proposé d'après les points gardés : un point aberrant ne doit pas fausser la détection. */
+  const detect = () => {
+    const pts = cleanedPoints()
+    if (!pts.length) return
+    let x0 = Infinity
+    let y0 = Infinity
+    let x1 = -Infinity
+    let y1 = -Infinity
+    for (const p of pts) {
+      x0 = Math.min(x0, p.x)
+      y0 = Math.min(y0, p.y)
+      x1 = Math.max(x1, p.x)
+      y1 = Math.max(y1, p.y)
+    }
+    candidates = detectCrs([x0, y0, x1, y1])
+    crs = candidates.length ? candidates[0].def.code : null
   }
 
   const loadFile = async (f: File) => {
     name = f.name
     raw = await f.text()
     reparse()
+  }
+
+  /** Points retenus après nettoyage (altitude retirée si demandé). */
+  const cleanedPoints = (): SurveyPoint[] => {
+    if (!file) return []
+    const extra = new Set(extraExcluded.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean))
+    const out: SurveyPoint[] = []
+    file.points.forEach((p, i) => {
+      const d = decisions.get(i)
+      if (d === 'exclure' || extra.has(p.id)) return
+      out.push(d === 'sans-altitude' ? { ...p, z: null } : p)
+    })
+    return out
+  }
+
+  /** Choix effectif pour un code : celui de l'utilisateur, sinon la reconnaissance proposée. */
+  const choiceFor = (rawCode: string): string => {
+    const key = codeKey(rawCode)
+    const c = choices.get(key)
+    if (c !== undefined) return c
+    const m = matchCode(rawCode, rules)
+    return m.quality === 'exact' || m.quality === 'approx' ? m.rule.code : SIMPLE
+  }
+
+  /** Dictionnaire effectif : chaque code du fichier pointe exactement vers le choix validé. */
+  const effectiveRules = (pts: SurveyPoint[]): CodeRule[] => {
+    let eff = rules.map((r) => ({ ...r, synonyms: [...r.synonyms] }))
+    const front: CodeRule[] = []
+    const keys = new Set(pts.map((p) => p.code.trim()).filter(Boolean).map(codeKey))
+    for (const key of keys) {
+      const sample = pts.find((p) => codeKey(p.code) === key)!.code
+      const c = choiceFor(sample)
+      for (const r of eff) r.synonyms = r.synonyms.filter((x) => normalizeCode(x) !== key)
+      let target = eff.find((r) => r.code === c)
+      if (!target && c === SIMPLE) {
+        target = { code: key, label: 'Point ' + key, kind: 'point', layer: '01_POINTS', color: 0x000000, symbol: 'croix', synonyms: [], lw: 0.18 }
+        eff.push(target)
+      }
+      if (!target) continue
+      if (normalizeCode(target.code) !== key) target.synonyms.push(key)
+      // Le choix l'emporte sur une règle dont le code s'écrit pareil (ex. « BORN » attribué à autre chose).
+      if (eff.some((r) => r !== target && normalizeCode(r.code) === key) && !front.includes(target)) front.push(target)
+    }
+    eff = [...front, ...eff.filter((r) => !front.includes(r))]
+    return eff
+  }
+
+  /** Points à dessiner : nettoyés, sans les codes « ne pas dessiner ». */
+  const drawnPoints = (): SurveyPoint[] => cleanedPoints().filter((p) => !p.code.trim() || choiceFor(p.code) !== IGNORE)
+
+  const bornesOf = (pts: SurveyPoint[], eff: CodeRule[]) => pts.filter((p) => {
+    const m = matchCode(p.code, eff)
+    return m.rule.kind === 'borne' || (m.quality === 'vide' && /^B[.\s-]?\d+[A-Za-z]?$/i.test(p.id.trim()))
+  })
+
+  const currentParcel = (): { proposals: ParcelProposal[]; recommended: string; chosen: BorneVertex[] | null; error: string | null } | null => {
+    const pts = drawnPoints()
+    const bornes = bornesOf(pts, effectiveRules(pts))
+    if (!options.parcel || bornes.length < 3) return null
+    const { proposals, recommended } = parcelProposals(bornes.map((b) => ({ id: b.id, x: b.x, y: b.y })))
+    const mode = parcelMode || recommended
+    if (mode === 'manuel') {
+      const names = manualOrder.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean)
+      const all = proposals.find((p) => p.mode === 'fichier')!.vertices
+      const chosen: BorneVertex[] = []
+      for (const n of names) {
+        const v = all.find((x) => x.label === n || x.source === n)
+        if (!v) return { proposals, recommended, chosen: null, error: `Borne « ${n} » inconnue. Noms disponibles : ${all.map((x) => x.label).join(', ')}` }
+        chosen.push(v)
+      }
+      if (chosen.length < 3) return { proposals, recommended, chosen: null, error: 'Indiquez au moins trois bornes, dans l’ordre du parcours.' }
+      if (new Set(chosen).size !== chosen.length) return { proposals, recommended, chosen: null, error: 'Une borne est citée deux fois.' }
+      return { proposals, recommended, chosen, error: null }
+    }
+    const p = proposals.find((x) => x.mode === mode) ?? proposals[0]
+    return { proposals, recommended, chosen: p.vertices, error: null }
   }
 
   const render = () => {
@@ -163,11 +332,12 @@ export function openAssistant(project: Project, source: { name: string; text: st
       return
     }
     const f = file
+    const dec = sourceDecimals(f)
     const cols: [string, string][] = [['-1', '—']]
     for (let i = 0; i < f.columnCount; i++) cols.push([String(i), `Colonne ${i + 1}${f.header[i] ? ' (' + f.header[i] + ')' : ''}`])
     const pick = (key: keyof ColumnMap, label: string) => field(label, select(cols, String(f.columns[key]), (v) => reparse({ ...f.columns, [key]: Number(v) })))
     s1.append(
-      h('p', null, h('b', null, name), ` — ${f.points.length} points lus · séparateur : ${delimiterName(f.delimiter)} · ${f.hasHeader ? 'ligne d’en-tête reconnue' : 'pas d’en-tête'}`),
+      h('p', null, h('b', null, name), ` — ${f.points.length} points lus · séparateur : ${delimiterName(f.delimiter)} · ${f.hasHeader ? 'ligne d’en-tête reconnue' : 'pas d’en-tête'} · coordonnées à ${dec} décimale(s), conservées telles quelles`),
       h('div', { class: 'row' }, pick('id', 'Identifiant'), pick('x', 'X (Est)'), pick('y', 'Y (Nord)'), pick('z', 'Altitude'), pick('code', 'Code / description')),
       h('div', { class: 'actions' }, h('button', { onclick: () => reparse({ ...f.columns, x: f.columns.y, y: f.columns.x }) }, 'Permuter X et Y')),
     )
@@ -180,7 +350,7 @@ export function openAssistant(project: Project, source: { name: string; text: st
           'table',
           { class: 'grid' },
           h('thead', null, h('tr', null, ...head.map((c) => h('th', null, c)))),
-          h('tbody', null, ...f.points.slice(0, 8).map((p) => h('tr', null, h('td', null, p.id), h('td', { class: 'mono' }, p.x.toFixed(3)), h('td', { class: 'mono' }, p.y.toFixed(3)), h('td', { class: 'mono' }, p.z === null ? '—' : p.z.toFixed(3)), h('td', null, p.code)))),
+          h('tbody', null, ...f.points.slice(0, 8).map((p) => h('tr', null, h('td', null, p.id), h('td', { class: 'mono' }, p.x.toFixed(dec)), h('td', { class: 'mono' }, p.y.toFixed(dec)), h('td', { class: 'mono' }, p.z === null ? '—' : p.z.toFixed(3)), h('td', null, p.code)))),
         ),
       ),
     )
@@ -192,15 +362,57 @@ export function openAssistant(project: Project, source: { name: string; text: st
     }
     if (!f.points.length) return
 
-    // 2. Contrôle
+    // 2. Nettoyage
     const q = checkPoints(f)
-    const s2 = h('section', null, h('h3', null, '2 · Contrôle des données'))
+    const s2 = h('section', null, h('h3', null, '2 · Nettoyage des points'))
+    s2.append(h('p', null, `${q.count} points, dont ${q.withZ} avec altitude${q.zRange ? ` (de ${q.zRange[0].toFixed(2)} à ${q.zRange[1].toFixed(2)} m)` : ''}. Étendue : ${(q.extent[2] - q.extent[0]).toFixed(1)} m × ${(q.extent[3] - q.extent[1]).toFixed(1)} m.`))
+    for (const a of q.anomalies.filter((a) => a.level === 'erreur' && /non importée/.test(a.message))) s2.append(h('div', { class: 'note err' }, a.message))
+    if (!flags.length) s2.append(h('div', { class: 'note ok' }, 'Aucun point suspect (doublon, coordonnée nulle, point isolé, altitude aberrante).'))
+    else {
+      const actionSel = (i: number) => select([['garder', 'Garder'], ['exclure', 'Exclure'], ['sans-altitude', 'Garder sans altitude']], decisions.get(i) ?? 'garder', (v) => {
+        if (v === 'garder') decisions.delete(i)
+        else decisions.set(i, v as CleanAction)
+        cleanValidated = false
+        render()
+      })
+      s2.append(
+        h('p', { class: 'muted' }, `${flags.length} point(s) à examiner. Une action est proposée pour chacun ; c’est vous qui décidez. Le fichier source n’est jamais modifié.`),
+        h(
+          'div',
+          { class: 'scroll' },
+          h(
+            'table',
+            { class: 'grid' },
+            h('thead', null, h('tr', null, ...['Point', 'X', 'Y', 'Z', 'Code', 'Problème', 'Décision'].map((c) => h('th', null, c)))),
+            h(
+              'tbody',
+              null,
+              ...flags.map((fl) => {
+                const p = f.points[fl.index]
+                return h('tr', null, h('td', null, p.id), h('td', { class: 'mono' }, p.x.toFixed(dec)), h('td', { class: 'mono' }, p.y.toFixed(dec)), h('td', { class: 'mono' }, p.z === null ? '—' : String(p.z)), h('td', null, p.code), h('td', null, fl.problem), h('td', null, actionSel(fl.index)))
+              }),
+            ),
+          ),
+        ),
+      )
+    }
+    const extra = h('input', { type: 'text', value: extraExcluded, placeholder: 'ex. 12, 47, 103' }) as HTMLInputElement
+    extra.addEventListener('change', () => {
+      extraExcluded = extra.value
+      cleanValidated = false
+      render()
+    })
+    const kept = cleanedPoints()
+    const noZ = [...decisions.values()].filter((d) => d === 'sans-altitude').length
     s2.append(
-      h('p', null, `${q.count} points, dont ${q.withZ} avec altitude${q.zRange ? ` (de ${q.zRange[0].toFixed(2)} à ${q.zRange[1].toFixed(2)} m)` : ''}. Étendue : ${(q.extent[2] - q.extent[0]).toFixed(1)} m × ${(q.extent[3] - q.extent[1]).toFixed(1)} m.`),
+      field('Exclure aussi ces points (identifiants)', extra, 'Pour écarter d’autres points de contrôle ou de mauvaises mesures.'),
+      h('div', { class: 'note ' + (cleanValidated ? 'ok' : '') }, `${kept.length} point(s) gardé(s) sur ${f.points.length} · ${f.points.length - kept.length} exclu(s) · ${noZ} altitude(s) ignorée(s).`),
+      h('div', { class: 'actions' }, h('button', { class: cleanValidated ? '' : 'primary', onclick: () => {
+        cleanValidated = true
+        detect()
+        render()
+      } }, cleanValidated ? 'Nettoyage validé ✓' : 'Valider le nettoyage')),
     )
-    if (!q.anomalies.length) s2.append(h('div', { class: 'note ok' }, 'Aucune anomalie détectée (doublons, coordonnées nulles ou aberrantes, altitudes suspectes).'))
-    for (const a of q.anomalies) s2.append(h('div', { class: 'note ' + (a.level === 'erreur' ? 'err' : a.level === 'alerte' ? 'warn' : '') }, a.message))
-    s2.append(h('p', { class: 'muted' }, 'Aucune donnée n’est corrigée ni supprimée automatiquement : corrigez le fichier source si nécessaire.'))
     root.append(s2)
 
     // 3. Système de coordonnées
@@ -210,10 +422,19 @@ export function openAssistant(project: Project, source: { name: string; text: st
     s3.append(field('Système du levé', select(crsOptions, crs ?? '', (v) => (crs = v || null)), candidates.length ? 'Proposition déduite des coordonnées et de votre région — à confirmer. Les coordonnées ne sont jamais converties sans votre accord.' : 'Aucun système reconnu : coordonnées traitées comme locales.'))
     root.append(s3)
 
-    // 4. Codes
-    const summary = summarizeCodes(f.points, rules)
-    const s4 = h('section', null, h('h3', null, '4 · Codes terrain'))
-    const ruleOptions: [string, string][] = [['', 'Point simple (non relié)'], ...rules.map((r): [string, string] => [r.code, `${r.label} (${r.kind})`])]
+    // 4. Codes : rien n'est appliqué sans validation
+    const pts = cleanedPoints()
+    const summary = summarizeCodes(pts, rules)
+    const s4 = h('section', null, h('h3', null, '4 · Codes terrain — à valider'))
+    const ruleOptions: [string, string][] = [[SIMPLE, 'Point simple (non relié)'], ...rules.map((r): [string, string] => [r.code, `${r.label} (${{ point: 'point', ligne: 'ligne', surface: 'surface fermée', borne: 'borne' }[r.kind]})`]), [IGNORE, 'Ne pas dessiner (déchet, point de contrôle)']]
+    const seenKeys = new Set<string>()
+    const rows = summary.filter((c) => {
+      if (!c.raw) return true
+      const k = codeKey(c.raw)
+      if (seenKeys.has(k)) return false
+      seenKeys.add(k)
+      return true
+    })
     s4.append(
       h(
         'div',
@@ -221,55 +442,120 @@ export function openAssistant(project: Project, source: { name: string; text: st
         h(
           'table',
           { class: 'grid' },
-          h('thead', null, h('tr', null, h('th', null, 'Code du fichier'), h('th', null, 'Points'), h('th', null, 'Interprété comme'), h('th', null, 'Reconnaissance'))),
+          h('thead', null, h('tr', null, h('th', null, 'Code du fichier'), h('th', null, 'Points'), h('th', null, 'Attribuer à'), h('th', null, 'Proposition'))),
           h(
             'tbody',
             null,
-            ...summary.map((c) =>
-              h(
+            ...rows.map((c) => {
+              const count = c.raw ? pts.filter((p) => codeKey(p.code) === codeKey(c.raw)).length : c.count
+              const user = c.raw ? choices.has(codeKey(c.raw)) : false
+              return h(
                 'tr',
                 null,
-                h('td', null, c.raw || '(vide)'),
-                h('td', null, c.count),
+                h('td', null, c.raw ? codeKey(c.raw) + (pts.some((p) => codeKey(p.code) === codeKey(c.raw) && /\d$/.test(normalizeCode(p.code))) ? ' (avec suffixes)' : '') : '(vide)'),
+                h('td', null, count),
                 h(
                   'td',
                   null,
                   c.raw
-                    ? select(ruleOptions, c.match.quality === 'inconnu' ? '' : c.match.rule.code, (v) => {
-                        // Le choix de l'utilisateur est mémorisé comme synonyme dans son dictionnaire.
-                        const key = c.raw.toUpperCase().replace(/\d+$/, '')
-                        for (const r of rules) r.synonyms = r.synonyms.filter((s) => s !== key)
-                        const target = rules.find((r) => r.code === v)
-                        if (target && target.code !== key) target.synonyms.push(key)
-                        saveRules(rules)
+                    ? select(ruleOptions, choiceFor(c.raw), (v) => {
+                        choices.set(codeKey(c.raw), v)
+                        codesValidated = false
+                        parcelMode = ''
                         render()
                       })
                     : 'Point levé',
                 ),
-                h('td', null, h('span', { class: 'badge ' + (c.match.quality === 'exact' ? 'ok' : c.match.quality === 'approx' ? 'warn' : c.match.quality === 'inconnu' ? 'err' : '') }, { exact: 'certaine', approx: 'approchée — à confirmer', inconnu: 'code inconnu', vide: 'sans code' }[c.match.quality])),
-              ),
-            ),
+                h('td', null, user ? h('span', { class: 'badge ok' }, 'votre choix') : h('span', { class: 'badge ' + (c.match.quality === 'exact' ? 'ok' : c.match.quality === 'approx' ? 'warn' : c.match.quality === 'inconnu' ? 'err' : '') }, { exact: 'reconnu', approx: 'approché — à vérifier', inconnu: 'inconnu — à attribuer', vide: 'sans code' }[c.match.quality])),
+              )
+            }),
           ),
         ),
       ),
-      h('p', { class: 'muted' }, 'Les points de même code sont reliés dans l’ordre du fichier (ou par suffixe : BAT1, BAT2…). Deux points ne sont jamais reliés seulement parce qu’ils sont proches. Vos choix sont mémorisés dans votre dictionnaire.'),
-      h('div', { class: 'actions' }, h('button', { onclick: () => {
-        rules = DEFAULT_RULES.map((r) => ({ ...r, synonyms: [...r.synonyms] }))
-        saveRules(rules)
-        render()
-      } }, 'Réinitialiser le dictionnaire')),
+      h('p', { class: 'muted' }, 'Les points d’un même code sont reliés dans l’ordre du fichier (ou par suffixe : BAT1, BAT2…). Rien n’est dessiné avant votre validation ; vos choix rejoignent alors votre dictionnaire.'),
+      h(
+        'div',
+        { class: 'actions' },
+        h('button', { class: codesValidated ? '' : 'primary', onclick: () => {
+          // Le dictionnaire mémorise les choix validés.
+          const eff = effectiveRules(pts)
+          rules = eff.filter((r) => rules.some((x) => x.code === r.code))
+          saveRules(rules)
+          for (const c of rows) if (c.raw) choices.set(codeKey(c.raw), choiceFor(c.raw))
+          codesValidated = true
+          render()
+        } }, codesValidated ? 'Codes validés ✓' : 'Valider l’attribution des codes'),
+        h('button', { onclick: () => {
+          rules = DEFAULT_RULES.map((r) => ({ ...r, synonyms: [...r.synonyms] }))
+          saveRules(rules)
+          choices = new Map()
+          codesValidated = false
+          render()
+        } }, 'Réinitialiser le dictionnaire'),
+      ),
     )
     root.append(s4)
 
-    // 5. Plan
-    const s5 = h('section', null, h('h3', null, '5 · Plan à produire'))
+    // 5. Parcelle : contour des bornes validé (jamais croisé)
+    const s5 = h('section', null, h('h3', null, '5 · Bornes et contour de la parcelle'))
+    const par = codesValidated ? currentParcel() : null
+    if (!codesValidated) s5.append(h('p', { class: 'muted' }, 'Validez d’abord les codes : les bornes sont les points attribués à « Borne ».'))
+    else if (!options.parcel) s5.append(h('p', { class: 'muted' }, 'Parcelle désactivée (option « Parcelle par les bornes » à l’étape 6).'))
+    else if (!par) s5.append(h('p', { class: 'muted' }, 'Moins de trois bornes : pas de parcelle.'))
+    else {
+      const mode = parcelMode || par.recommended
+      const list = h('div', { class: 'parcel-choices' })
+      for (const pr of par.proposals) {
+        list.append(
+          h(
+            'label',
+            { class: 'parcel-choice' + (mode === pr.mode ? ' sel' : '') },
+            h('input', { type: 'radio', name: 'parcel-order', checked: mode === pr.mode, onchange: () => {
+              parcelMode = pr.mode
+              render()
+            } }),
+            h('span', null, h('b', null, pr.label), pr.mode === par.recommended ? ' (recommandé)' : '', h('br'), pr.simple ? `Superficie ${pr.area.toFixed(2)} m² · périmètre ${pr.perimeter.toFixed(2)} m` : 'Contour croisé : superficie impossible', h('br'), h('small', null, pr.vertices.map((v) => (v.label === v.source || !v.source ? v.label : `${v.label} (${v.source})`)).join(' → '))),
+          ),
+        )
+      }
+      list.append(
+        h(
+          'label',
+          { class: 'parcel-choice' + (mode === 'manuel' ? ' sel' : '') },
+          h('input', { type: 'radio', name: 'parcel-order', checked: mode === 'manuel', onchange: () => {
+            parcelMode = 'manuel'
+            render()
+          } }),
+          h('span', null, h('b', null, 'Ordre saisi à la main'), h('br'), (() => {
+            const inp = h('input', { type: 'text', value: manualOrder, placeholder: 'ex. B.1, B.2, B.3, B.4' }) as HTMLInputElement
+            inp.addEventListener('change', () => {
+              manualOrder = inp.value
+              parcelMode = 'manuel'
+              render()
+            })
+            return inp
+          })()),
+        ),
+      )
+      s5.append(list)
+      if (par.error) s5.append(h('div', { class: 'note err' }, par.error))
+      if (par.chosen) {
+        const cr = crossings(par.chosen.map((v) => ({ id: v.label, x: v.x, y: v.y })))
+        const area = Math.abs(signedArea(par.chosen))
+        s5.append(h('div', { class: 'parcel-view' }, parcelPreview(par.chosen), h('div', null, cr.length ? h('div', { class: 'note err' }, `Ce contour se croise (${cr.length} croisement(s), en rouge) : la superficie n’a pas de sens. Choisissez un autre ordre.`) : h('div', { class: 'note ok' }, `Contour valide : ${par.chosen.length} bornes, superficie ${area.toFixed(2)} m².`), h('table', { class: 'grid' }, h('thead', null, h('tr', null, h('th', null, 'MAT'), h('th', null, 'X'), h('th', null, 'Y'))), h('tbody', null, ...par.chosen.map((v) => h('tr', null, h('td', null, v.label), h('td', { class: 'mono' }, v.x.toFixed(dec)), h('td', { class: 'mono' }, v.y.toFixed(dec)))))))))
+      }
+    }
+    root.append(s5)
+
+    // 6. Plan
+    const s6 = h('section', null, h('h3', null, '6 · Plan à produire'))
     const instruction = h('textarea', { rows: 2, value: instructionText, placeholder: 'Exemple : plan topographique et altimétrique au 1/500, format A3 paysage, courbes de niveau tous les 0,50 m, avec le tableau des coordonnées', oninput: () => (instructionText = instruction.value) })
     const understoodBox = h('div')
     const showUnderstood = () => {
       understoodBox.replaceChildren()
       if (understood) understoodBox.append(h('div', { class: 'note ' + (understood.summary.length ? 'ok' : 'warn') }, understood.summary.length ? 'Compris : ' + understood.summary.join(' ; ') + '.' : 'Aucune consigne reconnue dans cette phrase (échelle, format, courbes, parcellaire, numéros, altitudes, tableau, légende).'))
     }
-    s5.append(
+    s6.append(
       field('Décrivez le plan en une phrase (facultatif)', instruction, 'Interprétation par mots-clés, affichée ci-dessous pour vérification. Les calculs restent déterministes.'),
       h('div', { class: 'actions' }, h('button', { onclick: () => {
         understood = parseInstruction(instruction.value)
@@ -290,7 +576,10 @@ export function openAssistant(project: Project, source: { name: string; text: st
         checkbox('Numéros de points', options.showIds, (v) => (options.showIds = v)),
         checkbox('Altitudes', options.showZ, (v) => (options.showZ = v)),
         checkbox('Descriptions', options.showCodes, (v) => (options.showCodes = v)),
-        checkbox('Parcelle par les bornes', options.parcel, (v) => (options.parcel = v)),
+        checkbox('Parcelle par les bornes', options.parcel, (v) => {
+          options.parcel = v
+          render()
+        }),
         checkbox('Longueurs des côtés', options.sideLengths, (v) => (options.sideLengths = v)),
         checkbox('Triangulation visible', options.showTin, (v) => (options.showTin = v)),
         checkbox('Lisser les courbes', options.smoothContours, (v) => (options.smoothContours = v)),
@@ -314,28 +603,49 @@ export function openAssistant(project: Project, source: { name: string; text: st
       h('p', { class: 'muted' }, 'Les points sont insérés en blocs TCPOINT (attributs MAT, ALT, COD) sur les calques TOPOJIS, TopoMat et TopoAlt : le DXF exporté est reconnu par Covadis. Laissez les décalages à 0 pour conserver les coordonnées du fichier.'),
     )
     showUnderstood()
-    root.append(s5)
+    root.append(s6)
 
-    root.append(h('div', { class: 'actions' }, button))
+    root.append(h('div', { class: 'actions' }, button), blockers)
     updateButton()
   }
 
-  const button = h('button', { class: 'primary', onclick: () => generate() }, 'Analyser et générer mon plan')
+  const button = h('button', { class: 'primary', onclick: () => generate() }, 'Générer mon plan')
+  const blockers = h('div', { class: 'note warn' })
+  const missing = (): string[] => {
+    const out: string[] = []
+    if (!file || !file.points.length) return ['Chargez un fichier de points.']
+    if (file.questions.length > 0 && !confirmed) out.push('Confirmez l’interprétation des colonnes (étape 1).')
+    if (!cleanValidated) out.push('Validez le nettoyage des points (étape 2).')
+    if (!codesValidated) out.push('Validez l’attribution des codes (étape 4).')
+    else {
+      const par = currentParcel()
+      if (par && (!par.chosen || crossings(par.chosen.map((v) => ({ id: v.label, x: v.x, y: v.y }))).length)) out.push('Choisissez un contour de parcelle sans croisement (étape 5).')
+    }
+    return out
+  }
   const updateButton = () => {
-    button.disabled = !file || !file.points.length || (file.questions.length > 0 && !confirmed)
-    button.title = button.disabled ? 'Confirmez d’abord l’interprétation des colonnes' : ''
+    const m = missing()
+    button.disabled = m.length > 0
+    blockers.replaceChildren(...m.map((x) => h('div', null, '• ' + x)))
+    blockers.style.display = m.length ? '' : 'none'
   }
 
   const generate = () => {
-    if (!file) return
-    const plan = generatePlan(file.points, rules, options, name.replace(/\.[^.]+$/, '') + '_plan')
+    if (!file || missing().length) return
+    const pts = drawnPoints()
+    const eff = effectiveRules(pts)
+    const par = currentParcel()
+    const plan = generatePlan(pts, eff, { ...options, parcelVertices: par?.chosen ?? undefined }, name.replace(/\.[^.]+$/, '') + '_plan')
+    const excluded = file.points.length - cleanedPoints().length
+    const ignored = cleanedPoints().length - pts.length
+    if (excluded || ignored) plan.report.unshift({ level: 'alerte', message: `Nettoyage validé : ${excluded} point(s) exclu(s)${ignored ? `, ${ignored} point(s) aux codes « ne pas dessiner »` : ''}${[...decisions.values()].some((d) => d === 'sans-altitude') ? ', altitudes ignorées pour les points signalés' : ''}.` })
     plan.dataset.crs = crs
     plan.dataset.crsSource = crs ? 'user' : 'none'
     plan.dataset.meta.source = name
     if (existing && project.items.includes(existing)) project.replace(existing, plan.dataset, plan)
     else existing = project.add(plan.dataset, plan)
     close()
-    onDone({ item: existing, plan, paper: understood?.paper, landscape: understood?.landscape, scale: options.scale, showTable: understood?.showTable, showLegend: understood?.showLegend })
+    onDone({ item: existing, plan, paper: understood?.paper, landscape: understood?.landscape, scale: options.scale, showTable: understood?.showTable, showLegend: understood?.showLegend, coordDecimals: sourceDecimals(file) })
   }
 
   const loadSample = async () => {

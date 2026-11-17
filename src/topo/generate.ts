@@ -7,6 +7,7 @@
  * symbole sont fixées en millimètres papier. Les coordonnées du levé ne sont
  * jamais modifiées.
  */
+import { crossings, isBorneLabel, parcelProposals } from './parcel'
 import { ringArea } from '../core/geom'
 import { BYBLOCK, FOREGROUND, ensureLayer, newDataset, type Block, type Color, type Dataset, type EText, type Entity } from '../core/types'
 import { buildObjects, matchCode, type CodeRule, type SymbolName } from './codes'
@@ -19,8 +20,12 @@ export interface PlanOptions {
   showIds: boolean
   showZ: boolean
   showCodes: boolean
-  /** Relier les bornes en parcelle (dans l'ordre du fichier). */
+  /** Relier les bornes en parcelle (contour validé par l'utilisateur, jamais croisé). */
   parcel: boolean
+  /** Contour choisi dans l'assistant (ordre et noms des bornes) ; sinon ordre recommandé. */
+  parcelVertices?: { label: string; x: number; y: number }[]
+  /** Décimales des coordonnées dans les tableaux (celles du fichier source par défaut). */
+  coordDecimals?: number
   sideLengths: boolean
   /** Équidistance des courbes de niveau en mètres (0 = pas de courbes). */
   contourInterval: number
@@ -86,7 +91,7 @@ export interface PlanResult {
   legend: LegendItem[]
   tin: Tin | null
   /** Journal de ce qui a été fait et de ce qui reste à valider par le géomètre. */
-  report: { level: 'ok' | 'alerte' | 'info'; message: string }[]
+  report: { level: 'ok' | 'alerte' | 'info' | 'erreur'; message: string }[]
 }
 
 const black = (c: number): Color => (c === 0x000000 ? FOREGROUND : c)
@@ -143,7 +148,7 @@ export function tcpointBlock(): Block {
   }
 }
 
-const isBorneName = (id: string) => /^B[.\s-]?\d+[A-Za-z]?$/i.test(id.trim())
+const isBorneName = isBorneLabel
 
 /** Angle de texte lisible (jamais à l'envers). */
 function readable(angle: number): number {
@@ -297,8 +302,19 @@ export function generatePlan(input: SurveyPoint[], rules: CodeRule[], options: P
 
   // --- Parcelle : bornes reliées dans l'ordre -----------------------------
   let parcel: Parcel | null = null
+  let vertices: { label: string; x: number; y: number }[] | null = null
   if (options.parcel && borneCandidates.length >= 3) {
-    const vertices = borneCandidates.map((p, i) => ({ label: isBorneName(p.id) ? p.id.trim() : 'B.' + (i + 1), x: p.x, y: p.y }))
+    if (options.parcelVertices?.length) vertices = options.parcelVertices
+    else {
+      const { proposals, recommended } = parcelProposals(borneCandidates.map((p) => ({ id: p.id, x: p.x, y: p.y })))
+      vertices = proposals.find((x) => x.mode === recommended)!.vertices
+    }
+    if (crossings(vertices.map((v) => ({ id: v.label, x: v.x, y: v.y }))).length) {
+      report.push({ level: 'erreur', message: 'Le contour des bornes se croise : aucune parcelle ni superficie n’est dessinée. Choisissez un ordre de parcours valide dans l’assistant.' })
+      vertices = null
+    }
+  }
+  if (vertices) {
     parcel = computeParcel(vertices)
     const lLim = L('06_LIMITES', FOREGROUND, 0.5)
     const flat: number[] = []
@@ -334,7 +350,7 @@ export function generatePlan(input: SurveyPoint[], rules: CodeRule[], options: P
     })
     report.push({
       level: 'alerte',
-      message: `Parcelle construite en reliant ${vertices.length} bornes dans l'ordre du fichier : superficie ${parcel.area.toFixed(2)} m², périmètre ${parcel.perimeter.toFixed(2)} m. Limite à valider par le géomètre — elle n'a pas de valeur juridique en soi.`,
+      message: `Parcelle : ${vertices.length} bornes (${vertices.map((v) => v.label).join(' → ')}), contour sans croisement, superficie ${parcel.area.toFixed(2)} m², périmètre ${parcel.perimeter.toFixed(2)} m. Limite à valider par le géomètre — elle n'a pas de valeur juridique en soi.`,
     })
   }
 

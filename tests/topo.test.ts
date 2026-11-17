@@ -107,14 +107,18 @@ describe('génération du plan', () => {
     expect(plan.report.some((r) => r.level === 'alerte' && /à valider par le géomètre/.test(r.message))).toBe(true)
   })
 
-  it('tient sur un A4 au 1/500 mais pas au 1/200, sans jamais déformer', () => {
+  it('propose l’échelle ou le format qui tient, sans jamais déformer (bandeau du haut réservé)', () => {
     const dl = buildDisplayList(plan.dataset, null)
-    const spec: SheetSpec = { paper: 'A4', landscape: false, scale: 500, template: 'cameroun', info: EMPTY_INFO, center: null, showGrid: true, showNorth: true, showTable: true, showLegend: true, showArea: true, monochrome: false, unit: 1 }
+    const spec: SheetSpec = { paper: 'A3', landscape: false, scale: 500, template: 'cameroun', info: EMPTY_INFO, center: null, showGrid: true, showNorth: true, showTable: true, showLegend: true, showArea: true, monochrome: false, unit: 1 }
+    // Levé d'exemple de 72 × 85 m : A3 au 1/500 ; sur A4, le bandeau impose le 1/1000.
     expect(fitInfo(spec, dl.extent).fits).toBe(true)
+    const a4 = fitInfo({ ...spec, paper: 'A4' }, dl.extent)
+    expect(a4.fits).toBe(false)
+    expect(a4.bestScale).toBe(1000)
+    expect(a4.bestPaper).toBe('A3')
     const tight = fitInfo({ ...spec, scale: 200 }, dl.extent)
     expect(tight.fits).toBe(false)
     expect(tight.bestScale).toBe(500)
-    expect(tight.bestPaper).toBe('A2')
   })
 
   it('exporte un DXF relu à l’identique (entités, calques, blocs, attributs, emprise)', () => {
