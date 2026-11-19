@@ -3,7 +3,7 @@
  * codes → dessin généré. L'utilisateur garde la main à chaque étape ; rien n'est
  * corrigé ni supposé en silence.
  */
-import { detectCrs, type CrsCandidate } from '../core/crs'
+import { WORK_REGIONS, candidateInRegion, describePlace, detectCrs, setWorkRegion, workRegion, type CrsCandidate } from '../core/crs'
 import type { Item, Project } from '../core/project'
 import { DEFAULT_RULES, codeKey, inTinRule, isBreaklineRule, loadRules, matchCode, normalizeCode, saveRules, summarizeCodes, type CodeRule } from '../topo/codes'
 import { DEFAULT_PLAN, generatePlan, type PlanOptions, type PlanResult } from '../topo/generate'
@@ -239,7 +239,7 @@ export function openAssistant(project: Project, source: { name: string; text: st
       y1 = Math.max(y1, p.y)
     }
     candidates = detectCrs([x0, y0, x1, y1])
-    crs = candidates.length ? candidates[0].def.code : null
+    crs = candidates.length && candidateInRegion(candidates[0]) ? candidates[0].def.code : null
   }
 
   const loadFile = async (f: File) => {
@@ -424,9 +424,21 @@ export function openAssistant(project: Project, source: { name: string; text: st
 
     // 3. Système de coordonnées
     const s3 = h('section', null, h('h3', null, '3 · Système de coordonnées'))
-    const crsOptions: [string, string][] = candidates.slice(0, 8).map((c) => [c.def.code, `${c.def.name} — ${c.def.area}`])
+    const crsOptions: [string, string][] = candidates.slice(0, 8).map((c) => [c.def.code, `${candidateInRegion(c) ? '' : '✗ '}${c.def.name} — le levé tombe ${describePlace(c.lon, c.lat)}`])
     crsOptions.push(['', 'Coordonnées locales (non géoréférencées)'])
-    s3.append(field('Système du levé', select(crsOptions, crs ?? '', (v) => (crs = v || null)), candidates.length ? 'Proposition déduite des coordonnées et de votre région — à confirmer. Les coordonnées ne sont jamais converties sans votre accord.' : 'Aucun système reconnu : coordonnées traitées comme locales.'))
+    const chosen = candidates.find((c) => c.def.code === crs)
+    s3.append(
+      field('Pays de travail', select(WORK_REGIONS.map((r) => [r.id, r.name]), workRegion().id, (v) => {
+        setWorkRegion(v)
+        detect()
+        render()
+      }), 'Le système retenu doit placer le levé dans ce pays.'),
+      field('Système du levé', select(crsOptions, crs ?? '', (v) => {
+        crs = v || null
+        render()
+      }), candidates.length ? 'Chaque proposition dit où tomberait le levé. Les coordonnées du fichier ne sont jamais converties.' : 'Aucun système reconnu : coordonnées traitées comme locales.'),
+      chosen ? h('div', { class: 'note ' + (candidateInRegion(chosen) ? 'ok' : 'err') }, `Avec ce système, le levé est ${describePlace(chosen.lon, chosen.lat)}.`) : '',
+    )
     root.append(s3)
 
     // 4. Codes : rien n'est appliqué sans validation
@@ -604,7 +616,15 @@ export function openAssistant(project: Project, source: { name: string; text: st
         field('Échelle du dessin', select(SCALES.map((s) => [String(s), '1/' + s]), String(SCALES.includes(options.scale) ? options.scale : 500), (v) => (options.scale = Number(v)))),
         field('Équidistance des courbes (m)', h('input', { type: 'number', min: 0, step: 0.25, value: options.contourInterval, onchange: (e: Event) => (options.contourInterval = Math.max(0, parseFloat((e.target as HTMLInputElement).value) || 0)) }), '0 = pas de courbes'),
         field('Courbe maîtresse toutes les', h('input', { type: 'number', min: 1, step: 1, value: options.majorEvery, onchange: (e: Event) => (options.majorEvery = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 5)) })),
-        field('Côté maximal des triangles (m)', h('input', { type: 'number', min: 0, step: 1, value: options.maxEdge ?? 0, onchange: (e: Event) => (options.maxEdge = Math.max(0, parseFloat((e.target as HTMLInputElement).value) || 0)) }), '0 = automatique (6 × la médiane) : pas d’interpolation à travers les zones non levées'),
+        field('Emprise des courbes', select([['all', 'Toute l’enveloppe des points (comme Covadis)'], ['auto', 'Sans les grands triangles de bordure'], ['20', 'Triangles de 20 m au plus'], ['40', 'Triangles de 40 m au plus']], options.maxEdge === undefined || options.maxEdge === Infinity ? 'all' : options.maxEdge ? String(options.maxEdge) : 'auto', (v) => (options.maxEdge = v === 'all' ? Infinity : v === 'auto' ? 0 : Number(v))), 'Bordure : un côté de plus de 6 fois la médiane traverse une zone sans points.'),
+        field('Interrompre les courbes au-delà de', select([['0', 'Jamais (comme Covadis)'], ['3', '300 % (faces de murs, marches)'], ['5', '500 %']], String(options.maxSlope ?? 0), (v) => (options.maxSlope = Number(v))), 'Les talus (jusqu’à 100 %) restent toujours tracés.'),
+      ),
+      h(
+        'div',
+        { class: 'row' },
+        field('Couleur des courbes', select([['degrade', 'Dégradé selon la cote'], ['maitresses', 'Maîtresses rouges, intermédiaires orange']], options.contourColors ?? 'degrade', (v) => (options.contourColors = v as 'degrade' | 'maitresses'))),
+        field('Cotes le long des courbes, tous les (mm papier)', h('input', { type: 'number', min: 20, step: 10, value: options.labelSpacing ?? 80, onchange: (e: Event) => (options.labelSpacing = Math.max(20, parseFloat((e.target as HTMLInputElement).value) || 80)) })),
+        checkbox('Coter aussi les courbes intermédiaires', !!options.labelMinor, (v) => (options.labelMinor = v)),
       ),
       h(
         'div',

@@ -4,7 +4,7 @@
  * commande et barre d'état.
  */
 import { ping } from '../cloud/ping'
-import { crsLabel, detectCrs, getCrs, searchCrs, toLonLat, type CrsDef } from '../core/crs'
+import { WORK_REGIONS, candidateInRegion, crsLabel, describePlace, detectCrs, getCrs, searchCrs, setWorkRegion, toLonLat, workRegion, type CrsDef } from '../core/crs'
 import { colorToCss, polylineLength, rawExtent } from '../core/geom'
 import { Project, type Item } from '../core/project'
 import { FOREGROUND, ensureLayer, type Color, type Entity } from '../core/types'
@@ -142,10 +142,14 @@ export function startApp(root: HTMLElement): void {
       const res = await importFiles(files, (m) => (busy.textContent = m))
       for (const ds of res.datasets) {
         if (!ds.crs) {
+          // Proposition seulement si les coordonnées tombent dans le pays de travail ; toujours à confirmer.
           const c = detectCrs(rawExtent(ds))
-          if (c.length && c[0].distanceKm < 3000) {
+          if (c.length && candidateInRegion(c[0])) {
             ds.crs = c[0].def.code
             ds.crsSource = 'detected'
+            toast(`${ds.name} : système proposé ${c[0].def.name} — le fichier tombe ${describePlace(c[0].lon, c[0].lat)}. Vérifiez-le (clic sur le système, panneau de gauche).`, 'info', 12000)
+          } else if (c.length || rawExtent(ds)) {
+            toast(`${ds.name} : aucun système ne place ce fichier dans votre pays de travail (${workRegion().name}). Choisissez son système, ou gardez des coordonnées locales.`, 'erreur', 12000)
           }
         }
         const item = project.add(ds)
@@ -739,8 +743,13 @@ export function startApp(root: HTMLElement): void {
     const current = item ? item.ds.crs : project.crs
     let chosen: string | null = current
     const list = h('div')
-    const candidates = item ? detectCrs(rawExtent(item.ds)) : []
+    let candidates = item ? detectCrs(rawExtent(item.ds)) : []
     const info = h('div', { class: 'note' })
+    const regionSel = select(WORK_REGIONS.map((r) => [r.id, r.name]), workRegion().id, (v) => {
+      setWorkRegion(v)
+      candidates = item ? detectCrs(rawExtent(item.ds)) : []
+      showDefault()
+    })
     const draw = (defs: { def: CrsDef; note?: string }[]) => {
       clear(list)
       for (const { def, note } of defs) {
@@ -752,7 +761,7 @@ export function startApp(root: HTMLElement): void {
       if (!defs.length) list.append(h('p', { class: 'muted' }, 'Aucun système trouvé.'))
     }
     const showDefault = () => {
-      if (item && candidates.length) draw(candidates.map((c) => ({ def: c.def, note: `situerait le fichier vers ${Math.abs(c.lat).toFixed(3)}° ${c.lat >= 0 ? 'N' : 'S'}, ${Math.abs(c.lon).toFixed(3)}° ${c.lon >= 0 ? 'E' : 'O'}` })))
+      if (item && candidates.length) draw(candidates.map((c) => ({ def: c.def, note: `${candidateInRegion(c) ? '✓ ' : '✗ hors du pays de travail — '}le fichier tomberait ${describePlace(c.lon, c.lat)}` })))
       else {
         const def = current ? getCrs(current) : undefined
         draw(def ? [{ def }] : [])
@@ -765,10 +774,10 @@ export function startApp(root: HTMLElement): void {
     } })
     info.textContent = item
       ? candidates.length
-        ? 'Systèmes compatibles avec les coordonnées du fichier, classés selon votre région. Choisissez, puis vérifiez la position sur le fond de carte.'
+        ? 'Systèmes compatibles avec les coordonnées du fichier, classés selon votre pays de travail. Chaque ligne dit où tomberait le fichier : choisissez celui qui le place au bon endroit.'
         : 'Les coordonnées de ce fichier ne correspondent à aucun système du catalogue : probablement des coordonnées locales.'
       : 'Tous les fichiers sont reprojetés à la volée dans le système du projet. Les fichiers d’origine ne sont pas modifiés.'
-    body.append(info, field('Recherche', search), list)
+    body.append(info, field('Pays de travail', regionSel, 'Le système retenu doit placer les coordonnées dans ce pays. Réglage gardé sur cet appareil.'), field('Recherche', search), list)
     const close = modal(item ? `Système de coordonnées — ${item.ds.name}` : 'Système de coordonnées du projet', body)
     body.append(h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => {
       if (item) project.setDatasetCrs(item, chosen, 'user')

@@ -8,11 +8,13 @@
  * jamais modifiées.
  */
 import { crossings, isBorneLabel, parcelProposals } from './parcel'
-import { ringArea } from '../core/geom'
+import { approxTextWidth, ringArea } from '../core/geom'
+import { inwardFrames } from '../edit/ops'
 import { BYBLOCK, FOREGROUND, ensureLayer, newDataset, type Block, type Color, type Dataset, type EText, type Entity } from '../core/types'
 import { buildObjects, codeKey, inTinRule, isBreaklineRule, matchCode, type CodeRule, type SymbolName } from './codes'
 import type { SurveyPoint } from './points'
-import { buildTin, checkContours, contours, intervalDecimals, smooth, smoothingDeviation, type Tin } from './tin'
+import { buildTin, checkContours, contours, intervalDecimals, smooth, smoothingDeviation, steepTriangles, type Tin } from './tin'
+import { elevationColor, labelContour } from './contourlabels'
 
 export interface PlanOptions {
   /** Dénominateur de l'échelle (500 pour 1/500). */
@@ -30,8 +32,16 @@ export interface PlanOptions {
   noTinCodes?: string[]
   /** Codes (clés sans suffixe) dont les lignes sont des lignes de rupture ; sinon choix du dictionnaire. */
   breaklineCodes?: string[]
-  /** Longueur maximale des côtés de triangles (m) ; 0 = automatique. */
+  /** Longueur maximale des côtés de triangles (m) ; absent = toute l'enveloppe des points (comme Covadis), 0 = automatique. */
   maxEdge?: number
+  /** Pente au-delà de laquelle les courbes sont interrompues (faces de murs) ; 3 = 300 %, 0 ou absent = jamais. */
+  maxSlope?: number
+  /** Couleur des courbes : dégradé selon la cote, ou maîtresses rouges / intermédiaires orange. */
+  contourColors?: 'degrade' | 'maitresses'
+  /** Coter aussi les courbes intermédiaires (les maîtresses le sont toujours). */
+  labelMinor?: boolean
+  /** Distance entre deux cotes le long d'une courbe, en mm sur le papier. */
+  labelSpacing?: number
   sideLengths: boolean
   /** Équidistance des courbes de niveau en mètres (0 = pas de courbes). */
   contourInterval: number
@@ -326,31 +336,19 @@ export function generatePlan(input: SurveyPoint[], rules: CodeRule[], options: P
     const flat: number[] = []
     for (const v of vertices) flat.push(v.x, v.y)
     ds.entities.push({ t: 'pline', layer: lLim, color: -1, pts: Float64Array.from(flat), closed: true, props: { OBJET: 'Parcelle', SURFACE_M2: Math.round(parcel.area * 100) / 100 } })
-    const cx = vertices.reduce((s, v) => s + v.x, 0) / vertices.length
-    const cy = vertices.reduce((s, v) => s + v.y, 0) / vertices.length
     const lBornes = L('05_BORNES', 0xff0000, 0.35)
     const lCot = L('14_COTATIONS', FOREGROUND)
+    // Comme sur les plans cadastraux : noms des bornes et longueurs des côtés à l'intérieur.
+    const inward = inwardFrames(flat)
     vertices.forEach((v, i) => {
-      // Nom de borne, à l'extérieur de la parcelle
-      const dx = v.x - cx
-      const dy = v.y - cy
-      const d = Math.hypot(dx, dy) || 1
-      ds.entities.push(text(lBornes, v.x + (dx / d) * 3.2 * k, v.y + (dy / d) * 3.2 * k, 2.2, v.label, { ha: 1, va: 2 }))
+      const [ux, uy] = inward.vertex[i]
+      ds.entities.push(text(lBornes, v.x + ux * 3.2 * k, v.y + uy * 3.2 * k, 2.2, v.label, { ha: 1, va: 2 }))
       if (options.sideLengths) {
         const w = vertices[(i + 1) % vertices.length]
         const mx = (v.x + w.x) / 2
         const my = (v.y + w.y) / 2
         const ang = Math.atan2(w.y - v.y, w.x - v.x)
-        // Décalage vers l'extérieur
-        let nx = -(w.y - v.y)
-        let ny = w.x - v.x
-        const nl = Math.hypot(nx, ny) || 1
-        nx /= nl
-        ny /= nl
-        if ((mx + nx - cx) ** 2 + (my + ny - cy) ** 2 < (mx - cx) ** 2 + (my - cy) ** 2) {
-          nx = -nx
-          ny = -ny
-        }
+        const [nx, ny] = inward.edge[i]
         ds.entities.push(text(lCot, mx + nx * 2.0 * k, my + ny * 2.0 * k, 1.9, parcel!.sides[i].toFixed(2), { ha: 1, va: 2, rot: readable(ang) }))
       }
     })
@@ -380,7 +378,7 @@ export function generatePlan(input: SurveyPoint[], rules: CodeRule[], options: P
       .filter((l) => l.length >= 2)
     const tinPoints = points.filter(inTin)
     const excluded = points.length - tinPoints.length
-    tin = buildTin(tinPoints.map((p) => ({ x: p.x, y: p.y, z: p.z, id: p.id })), { breaklines, maxEdge: options.maxEdge || 0 })
+    tin = buildTin(tinPoints.map((p) => ({ x: p.x, y: p.y, z: p.z, id: p.id })), { breaklines, maxEdge: options.maxEdge === 0 ? 0 : (options.maxEdge ?? Infinity) })
     if (!tin) {
       report.push({ level: 'alerte', message: 'Moins de 3 points avec altitude : pas de modèle de terrain ni de courbes de niveau.' })
     } else {
@@ -416,28 +414,49 @@ export function generatePlan(input: SurveyPoint[], rules: CodeRule[], options: P
       if (options.contourInterval > 0) {
         const lMinor = L('11_COURBES_NIVEAU', 0xff9f00, 0.13)
         const lMajor = L('12_COURBES_MAITRESSES', 0xff0000, 0.3)
-        const list = contours(tin, options.contourInterval)
+        const maxSlope = options.maxSlope ?? 0
+        const list = contours(tin, options.contourInterval, { maxSlope })
+        const steepCount = maxSlope > 0 ? steepTriangles(tin, maxSlope) : 0
+        if (steepCount) report.push({ level: 'info', message: `${steepCount} face(s) de pente supérieure à ${Math.round(maxSlope * 100)} % (murs, marches) : les courbes y sont interrompues, comme sur les plans cadastraux.` })
         const major = Math.max(1, options.majorEvery)
         const decimals = intervalDecimals(options.contourInterval)
         let count = 0
         let deviation = 0
+        let zmin = Infinity
+        let zmax = -Infinity
+        for (const z of tin.zs) {
+          zmin = Math.min(zmin, z)
+          zmax = Math.max(zmax, z)
+        }
+        const degrade = options.contourColors !== 'maitresses'
+        const majorDecimals = intervalDecimals(options.contourInterval * major)
+        const textH = 1.5
         for (const c of list) {
           const isMajor = Math.round(c.z / options.contourInterval) % major === 0
           const pts = options.smoothContours ? smooth(c.pts, c.closed, 4) : c.pts
           if (options.smoothContours) deviation = Math.max(deviation, smoothingDeviation(tin, c.z, pts))
-          ds.entities.push({ t: 'pline', layer: isMajor ? lMajor : lMinor, color: -1, pts: Float64Array.from(pts), closed: c.closed, elev: c.z, props: { ALTITUDE: c.z } })
+          const color = degrade ? elevationColor(c.z, zmin, zmax) : isMajor ? 0xff0000 : 0xffc000
+          const layer = isMajor ? lMajor : lMinor
+          const props = { ALTITUDE: c.z }
           count++
-          // Cote de la courbe, au milieu, orientée le long de la courbe (posée sur un sommet exact)
-          const n = c.pts.length >> 1
-          const length = c.pts.length >= 4 ? Math.hypot(c.pts[c.pts.length - 2] - c.pts[0], c.pts[c.pts.length - 1] - c.pts[1]) : 0
-          if (isMajor && n >= 3 && (c.closed || length > 12 * k)) {
-            const i = (n >> 1) * 2
-            const ang = Math.atan2(c.pts[i + 1] - c.pts[i - 1], c.pts[i] - c.pts[i - 2])
-            ds.entities.push(text(lMajor, c.pts[i], c.pts[i + 1], 1.3, c.z.toFixed(decimals), { ha: 1, va: 2, rot: readable(ang) }))
+          if (isMajor || options.labelMinor) {
+            const label = c.z.toFixed(isMajor ? majorDecimals : decimals)
+            const textLength = approxTextWidth(label, textH * k) * 1.05
+            const lab = labelContour(pts, c.closed, { spacing: (options.labelSpacing ?? 80) * k, textLength, gap: 0.6 * k })
+            const pieces = lab.labels.length ? lab.pieces : [pts]
+            for (const piece of pieces) ds.entities.push({ t: 'pline', layer, color, pts: Float64Array.from(piece), closed: !lab.labels.length && c.closed, elev: c.z, props })
+            for (const l of lab.labels) ds.entities.push({ ...text(layer, l.x, l.y, textH, label, { ha: 1, va: 2, rot: l.rot }), color })
+          } else {
+            ds.entities.push({ t: 'pline', layer, color, pts: Float64Array.from(pts), closed: c.closed, elev: c.z, props })
           }
         }
-        legend.set('Courbe de niveau', { label: `Courbe de niveau (équidistance ${options.contourInterval} m)`, kind: 'ligne', color: 0xff9f00, symbol: 'croix', lw: 0.13 })
-        legend.set('Courbe maîtresse', { label: 'Courbe maîtresse', kind: 'ligne', color: 0xff0000, symbol: 'croix', lw: 0.3 })
+        if (degrade) {
+          legend.set('Courbe de niveau', { label: `Courbe de niveau (équidistance ${options.contourInterval} m), basse ${zmin.toFixed(1)} m`, kind: 'ligne', color: elevationColor(zmin, zmin, zmax), symbol: 'croix', lw: 0.13 })
+          legend.set('Courbe maîtresse', { label: `Courbe maîtresse, haute ${zmax.toFixed(1)} m`, kind: 'ligne', color: elevationColor(zmax, zmin, zmax), symbol: 'croix', lw: 0.3 })
+        } else {
+          legend.set('Courbe de niveau', { label: `Courbe de niveau (équidistance ${options.contourInterval} m)`, kind: 'ligne', color: 0xffc000, symbol: 'croix', lw: 0.13 })
+          legend.set('Courbe maîtresse', { label: 'Courbe maîtresse', kind: 'ligne', color: 0xff0000, symbol: 'croix', lw: 0.3 })
+        }
         const check = checkContours(tin, list)
         report.push({
           level: check.crossings || check.maxError > 1e-6 ? 'erreur' : 'ok',

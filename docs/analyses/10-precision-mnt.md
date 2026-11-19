@@ -46,3 +46,45 @@ d'imposer une ligne de rupture pour lever l'ambiguïté.
 décimales exactes, terrain courbe (contrôle indépendant, aucun croisement), sommets
 exactement à la cote d'une courbe, fossé avec et sans ligne de rupture, conflits signalés,
 lissage passant par les sommets exacts.
+
+## Comparaison avec Covadis 17 sur le levé de Mimboman (19 novembre 2026)
+
+Fichier fourni : courbes de niveau Covadis 17 (équidistance 0,50 m) et 322 points
+topographiques (bloc TCPOINT). La plateforme a construit son MNT sur les mêmes points,
+sans autre donnée.
+
+| Mesure | Résultat |
+|---|---|
+| Sommets des courbes Covadis exactement sur une courbe de la plateforme | médiane de l'écart **0,0 cm** |
+| 90 % des sommets Covadis | à moins de **7,7 cm** d'une courbe de la plateforme |
+| 95 % des sommets Covadis | à moins de **13,2 cm** |
+| Écart d'altitude des courbes Covadis par rapport au MNT des points | médiane 0,0 cm, 90 % 5,1 cm, **max 42 cm** |
+| Écart d'altitude des courbes de la plateforme par rapport au même MNT | **10⁻⁹ m** (limite du calcul) |
+| Croisements entre courbes de la plateforme | **0** |
+
+Lecture : Covadis 17 et la plateforme partent du même MNT (triangulation des points).
+Covadis densifie puis lisse ses courbes (segments de 0,65 m en moyenne) : à certains
+endroits, ses courbes ne sont plus à leur cote sur le MNT (jusqu'à 42 cm). Les courbes
+de la plateforme restent exactement à leur cote. Ajouter les murs ou les polylignes du
+dessin au MNT dégrade la concordance : Covadis n'a utilisé que les points.
+
+Réglages retenus d'après cette comparaison : emprise sur toute l'enveloppe des points
+(comme Covadis), courbes non interrompues par défaut (option : interrompre sur les faces
+de murs au-delà de 300 %), cotes le long des courbes, couleurs en dégradé selon la cote.
+
+## Positionnement géographique
+
+- Formules de projection contrôlées contre une implémentation indépendante des séries de
+  Krüger d'ordre 6 (référence des logiciels géodésiques) : écart **0,000000 mm** à
+  Ebolowa, Foumbot, Yaoundé, Douala, Garoua et en bord de fuseau ; aller-retour sans perte.
+- Défaut trouvé et corrigé : la détection du système de coordonnées d'un fichier qui
+  n'en déclare pas dépendait du fuseau horaire de l'appareil. Sur un appareil réglé
+  autrement qu'« Afrique/Douala », des coordonnées d'Ebolowa pouvaient être rattachées à
+  l'UTM 31 (670 km plus à l'ouest), à un système marocain ou à un fuseau du Pacifique.
+  Désormais, un réglage « Pays de travail » (Cameroun par défaut) impose que le système
+  proposé place les points dans ce pays, et chaque proposition affiche la ville la plus
+  proche (« près d'Ebolowa, 2 km ») avant validation.
+- Systèmes camerounais historiques ajoutés (paramètres EPSG) : Manoca 1962 / UTM 32 Nord
+  (EPSG:2215) et Douala 1948 / AEF ouest (EPSG:3119). Leur passage au WGS 84 est une
+  translation à trois paramètres, de précision métrique : ils sont proposés, jamais
+  choisis d'office.

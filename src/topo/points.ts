@@ -5,7 +5,7 @@
  * Principe : rien n'est corrigé ni supprimé en silence. Les ambiguïtés et les
  * anomalies sont rapportées ; c'est le géomètre qui décide.
  */
-import { detectCrs, regionHint } from '../core/crs'
+import { candidateInRegion, detectCrs, workRegion } from '../core/crs'
 
 export interface SurveyPoint {
   id: string
@@ -90,10 +90,12 @@ function guessEastNorth(a: number[], b: number[]): { swap: boolean; sure: boolea
   }
   const ma = mid(a)
   const mb = mid(b)
-  const hint = regionHint()
+  // Hypothèse retenue : celle qui place le levé dans le pays de travail, au plus près de son centre.
+  const region = workRegion()
+  const hint = region.center
   const best = (x: number, y: number): number => {
-    const c = detectCrs([x, y, x, y], hint)
-    return c.length ? (hint ? c[0].distanceKm : 0) : Infinity
+    const c = detectCrs([x, y, x, y], region)
+    return c.length && candidateInRegion(c[0], region) ? c[0].distanceKm : Infinity
   }
   const d1 = best(ma, mb) // première colonne = Est
   const d2 = best(mb, ma) // première colonne = Nord

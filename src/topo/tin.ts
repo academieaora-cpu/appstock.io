@@ -323,9 +323,23 @@ export function levelValue(k: number, interval: number): number {
  * exactement à l'altitude d'une courbe est traité comme « au-dessus » (règle de
  * perturbation symbolique), ce qui garde des courbes continues et sans branche fantôme.
  */
-export function contours(tin: Tin, interval: number): Contour[] {
+export function contours(tin: Tin, interval: number, options: { maxSlope?: number } = {}): Contour[] {
   if (!(interval > 0)) return []
   const { xs, ys, zs, triangles } = tin
+  // Faces quasi verticales (murs, marches) : pas de courbe dessus si une pente maximale est donnée.
+  const steep = new Uint8Array(triangles.length / 3)
+  if (options.maxSlope && options.maxSlope > 0) {
+    for (let t = 0; t < triangles.length; t += 3) {
+      const a = triangles[t]
+      const b = triangles[t + 1]
+      const c = triangles[t + 2]
+      const d = (xs[b] - xs[a]) * (ys[c] - ys[a]) - (xs[c] - xs[a]) * (ys[b] - ys[a])
+      if (d === 0) continue
+      const px = ((zs[b] - zs[a]) * (ys[c] - ys[a]) - (zs[c] - zs[a]) * (ys[b] - ys[a])) / d
+      const py = ((zs[c] - zs[a]) * (xs[b] - xs[a]) - (zs[b] - zs[a]) * (xs[c] - xs[a])) / d
+      if (Math.hypot(px, py) > options.maxSlope) steep[t / 3] = 1
+    }
+  }
   let zmin = Infinity
   let zmax = -Infinity
   for (let i = 0; i < zs.length; i++) {
@@ -356,6 +370,7 @@ export function contours(tin: Tin, interval: number): Contour[] {
       return kk
     }
     for (let t = 0; t < triangles.length; t += 3) {
+      if (steep[t / 3]) continue
       const a = triangles[t]
       const b = triangles[t + 1]
       const c = triangles[t + 2]
@@ -454,6 +469,23 @@ export function smooth(pts: number[], closed: boolean, perSegment = 4): number[]
   }
   if (!closed) out.push(pts[pts.length - 2], pts[pts.length - 1])
   return out
+}
+
+/** Nombre de triangles plus raides que la pente donnée (faces de murs, marches). */
+export function steepTriangles(tin: Tin, maxSlope: number): number {
+  const { xs, ys, zs, triangles } = tin
+  let n = 0
+  for (let t = 0; t < triangles.length; t += 3) {
+    const a = triangles[t]
+    const b = triangles[t + 1]
+    const c = triangles[t + 2]
+    const d = (xs[b] - xs[a]) * (ys[c] - ys[a]) - (xs[c] - xs[a]) * (ys[b] - ys[a])
+    if (d === 0) continue
+    const px = ((zs[b] - zs[a]) * (ys[c] - ys[a]) - (zs[c] - zs[a]) * (ys[b] - ys[a])) / d
+    const py = ((zs[c] - zs[a]) * (xs[b] - xs[a]) - (zs[b] - zs[a]) * (xs[c] - xs[a])) / d
+    if (Math.hypot(px, py) > maxSlope) n++
+  }
+  return n
 }
 
 /** Plus grand écart vertical entre une courbe (lissée) et le MNT, en mètres. */

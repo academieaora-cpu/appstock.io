@@ -106,6 +106,20 @@ function buildCatalog(): CrsDef[] {
       area: 'Côte d’Ivoire (ouest de 6° O)',
     },
     {
+      code: 'EPSG:2215',
+      name: 'Manoca 1962 / UTM zone 32 Nord',
+      proj4: '+proj=utm +zone=32 +ellps=clrk80ign +towgs84=-70.9,-151.8,-41.4,0,0,0,0 +units=m +no_defs',
+      bbox: [8.32, 2.16, 10.4, 4.99],
+      area: 'Cameroun, zone côtière (ancien système ; passage au WGS 84 par translation, précision métrique)',
+    },
+    {
+      code: 'EPSG:3119',
+      name: 'Douala 1948 / AEF ouest',
+      proj4: '+proj=tmerc +lat_0=0 +lon_0=10.5 +k=0.999 +x_0=1000000 +y_0=1000000 +ellps=intl +towgs84=-206.1,-174.7,-87.7,0,0,0,0 +units=m +no_defs',
+      bbox: [8.32, 2.16, 10.4, 4.99],
+      area: 'Cameroun, zone côtière (ancien système remplacé par Manoca 1962 ; précision métrique)',
+    },
+    {
       code: 'EPSG:26191',
       name: 'Merchich / Nord Maroc',
       proj4: '+proj=lcc +lat_1=33.3 +lat_0=33.3 +lon_0=-5.4 +k_0=0.999625769 +x_0=500000 +y_0=300000 +a=6378249.2 +b=6356515 +towgs84=31,146,47,0,0,0,0 +units=m +no_defs',
@@ -278,6 +292,116 @@ const TZ_HINTS: Record<string, [number, number]> = {
   'America/Cayenne': [-53, 4],
 }
 
+export interface WorkRegion {
+  id: string
+  name: string
+  /** Ouest, sud, est, nord. */
+  bbox: [number, number, number, number]
+  center: [number, number]
+}
+
+/** Pays de travail : la détection retient le système qui place les coordonnées dans ce pays. */
+export const WORK_REGIONS: WorkRegion[] = [
+  { id: 'CM', name: 'Cameroun', bbox: [8.4, 1.6, 16.2, 13.1], center: [11.5, 4.5] },
+  { id: 'GA', name: 'Gabon', bbox: [8.6, -4.0, 14.6, 2.4], center: [11.6, -0.6] },
+  { id: 'CG', name: 'Congo', bbox: [11.0, -5.1, 18.7, 3.8], center: [15.3, -1.0] },
+  { id: 'GQ', name: 'Guinée équatoriale', bbox: [5.6, -1.5, 11.4, 3.8], center: [10.3, 1.6] },
+  { id: 'TD', name: 'Tchad', bbox: [13.4, 7.4, 24.0, 23.5], center: [18.7, 15.4] },
+  { id: 'CF', name: 'Centrafrique', bbox: [14.4, 2.2, 27.5, 11.0], center: [20.9, 6.6] },
+  { id: 'NG', name: 'Nigeria', bbox: [2.6, 4.2, 14.7, 13.9], center: [8.7, 9.1] },
+  { id: 'CD', name: 'RD Congo', bbox: [12.2, -13.5, 31.4, 5.4], center: [23.6, -2.9] },
+  { id: 'CI', name: 'Côte d’Ivoire', bbox: [-8.6, 4.3, -2.5, 10.8], center: [-5.5, 7.5] },
+  { id: 'SN', name: 'Sénégal', bbox: [-17.6, 12.3, -11.3, 16.7], center: [-14.5, 14.5] },
+  { id: 'ML', name: 'Mali', bbox: [-12.3, 10.1, 4.3, 25.0], center: [-4.0, 17.6] },
+  { id: 'BF', name: 'Burkina Faso', bbox: [-5.6, 9.4, 2.4, 15.1], center: [-1.6, 12.3] },
+  { id: 'NE', name: 'Niger', bbox: [0.1, 11.6, 16.0, 23.6], center: [8.1, 17.6] },
+  { id: 'BJ', name: 'Bénin', bbox: [0.7, 6.2, 3.9, 12.4], center: [2.3, 9.3] },
+  { id: 'TG', name: 'Togo', bbox: [-0.2, 6.1, 1.9, 11.2], center: [0.8, 8.6] },
+  { id: 'GN', name: 'Guinée', bbox: [-15.1, 7.2, -7.6, 12.7], center: [-11.0, 10.4] },
+  { id: 'MA', name: 'Maroc', bbox: [-13.2, 27.6, -1.0, 35.9], center: [-6.8, 31.8] },
+  { id: 'DZ', name: 'Algérie', bbox: [-8.7, 19.0, 12.0, 37.1], center: [2.6, 28.0] },
+  { id: 'TN', name: 'Tunisie', bbox: [7.5, 30.2, 11.6, 37.6], center: [9.5, 34.0] },
+  { id: 'MG', name: 'Madagascar', bbox: [43.2, -25.6, 50.5, -11.9], center: [46.9, -18.8] },
+  { id: 'FR', name: 'France', bbox: [-5.2, 41.3, 9.6, 51.1], center: [2.5, 46.6] },
+]
+
+const TZ_REGION: Record<string, string> = {
+  'Africa/Douala': 'CM', 'Africa/Libreville': 'GA', 'Africa/Brazzaville': 'CG', 'Africa/Malabo': 'GQ', 'Africa/Ndjamena': 'TD', 'Africa/Bangui': 'CF',
+  'Africa/Lagos': 'NG', 'Africa/Kinshasa': 'CD', 'Africa/Lubumbashi': 'CD', 'Africa/Abidjan': 'CI', 'Africa/Dakar': 'SN', 'Africa/Bamako': 'ML',
+  'Africa/Ouagadougou': 'BF', 'Africa/Niamey': 'NE', 'Africa/Porto-Novo': 'BJ', 'Africa/Lome': 'TG', 'Africa/Conakry': 'GN', 'Africa/Casablanca': 'MA',
+  'Africa/Algiers': 'DZ', 'Africa/Tunis': 'TN', 'Indian/Antananarivo': 'MG', 'Europe/Paris': 'FR',
+}
+
+/**
+ * Pays de travail : choix enregistré par l'utilisateur ; sinon déduit du fuseau horaire
+ * seulement s'il désigne sans ambiguïté un pays ; sinon le Cameroun (marché de la plateforme).
+ */
+export function workRegion(): WorkRegion {
+  try {
+    const id = localStorage.getItem('appstock.workRegion')
+    const r = WORK_REGIONS.find((x) => x.id === id)
+    if (r) return r
+  } catch {
+    /* stockage indisponible */
+  }
+  try {
+    const id = TZ_REGION[Intl.DateTimeFormat().resolvedOptions().timeZone]
+    const r = WORK_REGIONS.find((x) => x.id === id)
+    if (r) return r
+  } catch {
+    /* fuseau inconnu */
+  }
+  return WORK_REGIONS[0]
+}
+
+export function setWorkRegion(id: string): void {
+  try {
+    localStorage.setItem('appstock.workRegion', id)
+  } catch {
+    /* stockage indisponible */
+  }
+}
+
+/** Villes de référence (longitude, latitude) : pour dire en clair où tombent des coordonnées. */
+const PLACES: [string, number, number][] = [
+  ['Yaoundé', 11.502, 3.848], ['Douala', 9.768, 4.051], ['Garoua', 13.398, 9.302], ['Bamenda', 10.146, 5.96], ['Maroua', 14.316, 10.591],
+  ['Bafoussam', 10.418, 5.478], ['Ngaoundéré', 13.585, 7.327], ['Bertoua', 13.685, 4.578], ['Loum', 9.735, 4.718], ['Kumba', 9.433, 4.636],
+  ['Edéa', 10.133, 3.8], ['Kribi', 9.91, 2.94], ['Nkongsamba', 9.94, 4.954], ['Mbouda', 10.255, 5.626], ['Dschang', 10.053, 5.444],
+  ['Foumban', 10.901, 5.727], ['Foumbot', 10.633, 5.508], ['Ebolowa', 11.154, 2.915], ['Sangmélima', 11.983, 2.933], ['Mbalmayo', 11.501, 3.517],
+  ['Bafia', 11.233, 4.75], ['Obala', 11.533, 4.167], ['Limbé', 9.214, 4.024], ['Buea', 9.241, 4.155], ['Tiko', 9.36, 4.075], ['Bafang', 10.183, 5.157],
+  ['Bangangté', 10.517, 5.15], ['Kousséri', 15.031, 12.077], ['Mokolo', 13.802, 10.74], ['Kaélé', 14.45, 10.1], ['Guider', 13.95, 9.933],
+  ['Meiganga', 14.3, 6.517], ['Tibati', 12.633, 6.467], ['Batouri', 14.364, 4.43], ['Abong-Mbang', 13.183, 3.983], ['Yokadouma', 15.05, 3.517],
+  ['Akonolinga', 12.25, 3.767], ['Nanga-Eboko', 12.367, 4.683], ['Mfou', 11.633, 3.717], ['Soa', 11.594, 3.976], ['Ambam', 11.283, 2.383],
+  ['Campo', 9.817, 2.367], ['Mamfé', 9.3, 5.767], ['Kumbo', 10.683, 6.2], ['Wum', 10.067, 6.383], ['Nkambé', 10.667, 6.583], ['Yagoua', 15.233, 10.333],
+  ['Mora', 14.133, 11.05], ['Tcholliré', 14.167, 8.4], ['Banyo', 11.817, 6.75], ['Lolodorf', 10.733, 3.233], ['Éséka', 10.767, 3.65],
+  ['Monatélé', 11.2, 4.267], ['Ntui', 11.633, 4.45], ['Yabassi', 9.967, 4.45], ['Manjo', 9.817, 4.833], ['Mbanga', 9.567, 4.5],
+  ['Libreville', 9.454, 0.39], ['Malabo', 8.783, 3.75], ['Bata', 9.767, 1.867], ['N’Djamena', 15.044, 12.134], ['Bangui', 18.555, 4.394],
+  ['Brazzaville', 15.283, -4.267], ['Kinshasa', 15.313, -4.322], ['Lagos', 3.379, 6.524], ['Abuja', 7.491, 9.072], ['Calabar', 8.327, 4.958],
+  ['Abidjan', -4.008, 5.36], ['Dakar', -17.447, 14.693], ['Paris', 2.352, 48.857], ['Rabat', -6.85, 34.02], ['Alger', 3.059, 36.754], ['Tunis', 10.182, 36.806],
+]
+
+function haversine(lon1: number, lat1: number, lon2: number, lat2: number): number {
+  const r = Math.PI / 180
+  const a = Math.sin(((lat2 - lat1) * r) / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lon2 - lon1) * r) / 2) ** 2
+  return 12742 * Math.asin(Math.min(1, Math.sqrt(a)))
+}
+
+/** « près d'Ebolowa (2 km) », ou la position en degrés si aucune ville de référence n'est proche. */
+export function describePlace(lon: number, lat: number): string {
+  let best: [string, number] | null = null
+  for (const [name, x, y] of PLACES) {
+    const d = haversine(lon, lat, x, y)
+    if (!best || d < best[1]) best = [name, d]
+  }
+  const deg = `${Math.abs(lat).toFixed(4)}° ${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lon).toFixed(4)}° ${lon >= 0 ? 'E' : 'O'}`
+  if (best && best[1] <= 80) {
+    const name = best[0]
+    const prep = /^[AEÉÈIOU]/.test(name) ? 'd’' : 'de '
+    return `près ${prep}${name} (${best[1] < 1 ? 'moins de 1' : best[1].toFixed(0)} km) · ${deg}`
+  }
+  return deg
+}
+
 export function regionHint(): [number, number] | null {
   try {
     const stored = localStorage.getItem('appstock.region')
@@ -318,19 +442,25 @@ function haversineKm(lon1: number, lat1: number, lon2: number, lat2: number): nu
  * tombe dans la zone d'usage du système. Les candidats sont classés par proximité avec
  * la région de travail (`hint`), ce qui lève l'ambiguïté entre fuseaux UTM.
  */
-export function detectCrs(extent: Extent, hint: [number, number] | null = regionHint()): CrsCandidate[] {
+export function detectCrs(extent: Extent, where: WorkRegion | [number, number] | null = workRegion()): CrsCandidate[] {
   const [minX, minY, maxX, maxY] = extent
   if (!Number.isFinite(minX + minY + maxX + maxY)) return []
   const cx = (minX + maxX) / 2
   const cy = (minY + maxY) / 2
+  // Pays de travail : celui donné, ou celui qui contient le point indiqué.
+  const region: WorkRegion | null = Array.isArray(where)
+    ? (WORK_REGIONS.find((r) => where[0] >= r.bbox[0] && where[0] <= r.bbox[2] && where[1] >= r.bbox[1] && where[1] <= r.bbox[3]) ?? null)
+    : where
+  const center: [number, number] | null = Array.isArray(where) ? where : (region?.center ?? null)
+  const inRegion = (lon: number, lat: number) => !!region && lon >= region.bbox[0] - 0.3 && lon <= region.bbox[2] + 0.3 && lat >= region.bbox[1] - 0.3 && lat <= region.bbox[3] + 0.3
   const out: CrsCandidate[] = []
   const looksGeographic = minX >= -180 && maxX <= 180 && minY >= -90 && maxY <= 90
   for (const def of CATALOG) {
     if (def.code.startsWith('PERSO:')) continue
     if (def.geographic) {
       if (!looksGeographic) continue
-      const d = hint ? haversineKm(cx, cy, hint[0], hint[1]) : Infinity
-      out.push({ def, lon: cx, lat: cy, distanceKm: d, score: 1000 - Math.min(d, 900) / 10 })
+      const d = center ? haversineKm(cx, cy, center[0], center[1]) : Infinity
+      out.push({ def, lon: cx, lat: cy, distanceKm: d, score: 3000 - Math.min(d, 900) / 10 })
       continue
     }
     if (looksGeographic || def.code === 'EPSG:3857') continue
@@ -345,16 +475,25 @@ export function detectCrs(extent: Extent, hint: [number, number] | null = region
     const [w, s, e, n] = def.bbox
     const margin = 0.3
     if (lon < w - margin || lon > e + margin || lat < s - margin || lat > n + margin) continue
-    const d = hint ? haversineKm(lon, lat, hint[0], hint[1]) : Infinity
+    const d = center ? haversineKm(lon, lat, center[0], center[1]) : Infinity
+    const inside = inRegion(lon, lat)
     let score = 100
-    // Un système national ou local est plus probable qu'un fuseau mondial quand les deux conviennent.
-    if (!/UTM zone/.test(def.name)) score += 20
-    if (def.code === 'EPSG:27572') score -= 30
-    if (hint) score += 400 - Math.min(d, 4000) / 10
+    // Décisif : les coordonnées doivent tomber dans le pays de travail.
+    if (inside) score += 1000
+    // Système national ou local, à égalité de position : seulement dans le pays de travail.
+    if (inside && !/UTM zone/.test(def.name)) score += 20
+    // Anciens systèmes à translation approchée : proposés, jamais choisis d'office.
+    if (def.code === 'EPSG:27572' || def.code === 'EPSG:2215' || def.code === 'EPSG:3119') score -= 30
+    if (center) score += 400 - Math.min(d, 4000) / 10
     out.push({ def, lon, lat, distanceKm: d, score })
   }
   out.sort((a, b) => b.score - a.score)
   return out.slice(0, 12)
+}
+
+/** Les coordonnées tombent-elles dans le pays de travail avec ce candidat ? */
+export function candidateInRegion(c: CrsCandidate, region: WorkRegion = workRegion()): boolean {
+  return c.lon >= region.bbox[0] - 0.3 && c.lon <= region.bbox[2] + 0.3 && c.lat >= region.bbox[1] - 0.3 && c.lat <= region.bbox[3] + 0.3
 }
 
 /** Recherche dans le catalogue (code, nom, pays). */

@@ -386,6 +386,39 @@ export function ringAreaAbs(ring: ArrayLike<number>): number {
   return Math.abs(ringArea(ring))
 }
 
+/**
+ * Directions vers l'intérieur d'un polygone : pour chaque côté (normale unitaire) et pour
+ * chaque sommet (bissectrice des normales des deux côtés), selon le sens de parcours.
+ */
+export function inwardFrames(ring: ArrayLike<number>): { edge: Pt[]; vertex: Pt[] } {
+  const n = ring.length >> 1
+  const ccw = ringArea(ring) > 0
+  const edge: Pt[] = []
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n
+    const dx = ring[j * 2] - ring[i * 2]
+    const dy = ring[j * 2 + 1] - ring[i * 2 + 1]
+    const l = Math.hypot(dx, dy) || 1
+    // Intérieur à gauche du côté si le polygone tourne dans le sens trigonométrique.
+    edge.push(ccw ? [-dy / l, dx / l] : [dy / l, -dx / l])
+  }
+  const vertex: Pt[] = []
+  for (let i = 0; i < n; i++) {
+    const a = edge[(i - 1 + n) % n]
+    const b = edge[i]
+    let x = a[0] + b[0]
+    let y = a[1] + b[1]
+    const l = Math.hypot(x, y)
+    if (l < 1e-9) [x, y] = b
+    else {
+      x /= l
+      y /= l
+    }
+    vertex.push([x, y])
+  }
+  return { edge, vertex }
+}
+
 /** Gisement de A vers B en grades (0 au nord, sens horaire, 400 gr par tour). */
 export function gisement(ax: number, ay: number, bx: number, by: number): number {
   let g = (Math.atan2(bx - ax, by - ay) * 200) / Math.PI

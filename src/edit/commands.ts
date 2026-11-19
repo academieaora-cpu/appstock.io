@@ -4,11 +4,12 @@
  * est généré à partir de ce registre, il ne peut donc pas diverger du logiciel.
  */
 import { toLonLat } from '../core/crs'
-import { polylineLength, translate } from '../core/geom'
+import { approxTextWidth, polylineLength, translate } from '../core/geom'
 import type { Item } from '../core/project'
 import { BYBLOCK, FOREGROUND, type Block, type Color, type EText, type Entity } from '../core/types'
 import { symbolBlock, tcpointBlock } from '../topo/generate'
 import { formatArea } from '../topo/sheet'
+import { elevationColor, labelContour } from '../topo/contourlabels'
 import { buildTin, checkContours, contours, intervalDecimals, type TerrainPoint, type Tin } from '../topo/tin'
 import { Cancelled, fmt, parseNumber, type CommandDef, type Editor, type Ghost, type Keyword } from './editor'
 import {
@@ -17,6 +18,7 @@ import {
   closedRing,
   explode,
   gisement,
+  inwardFrames,
   mirrorAbout,
   offsetPolyline,
   pointRayonne,
@@ -154,10 +156,10 @@ export function dimension(p1: Pt, p2: Pt, pos: Pt, k: number): { block: Block; i
   return { block: { name, bx: 0, by: 0, entities }, insert: { t: 'insert', layer: 'COTATIONS', color: BYLAYER, block: name, x: 0, y: 0, sx: 1, sy: 1, rot: 0, props: { COTE: Number(length.toFixed(3)) } }, length }
 }
 
-/** Longueurs des côtés écrites le long d'une polyligne, à l'extérieur. */
+/** Longueurs des côtés écrites le long d'une polyligne ; à l'intérieur d'une parcelle fermée. */
 function sideLabels(pts: number[], closed: boolean, k: number): EText[] {
   const n = pts.length / 2
-  const c = closed ? centroid(pts) : null
+  const inward = closed ? inwardFrames(pts).edge : null
   const out: EText[] = []
   const count = closed ? n : n - 1
   for (let i = 0; i < count; i++) {
@@ -168,14 +170,9 @@ function sideLabels(pts: number[], closed: boolean, k: number): EText[] {
     const y1 = pts[j * 2 + 1]
     const len = Math.hypot(x1 - x0, y1 - y0)
     if (len === 0) continue
-    let nx = -(y1 - y0) / len
-    let ny = (x1 - x0) / len
+    const [nx, ny] = inward ? inward[i] : [-(y1 - y0) / len, (x1 - x0) / len]
     const mx = (x0 + x1) / 2
     const my = (y0 + y1) / 2
-    if (c && (mx + nx - c[0]) ** 2 + (my + ny - c[1]) ** 2 < (mx - c[0]) ** 2 + (my - c[1]) ** 2) {
-      nx = -nx
-      ny = -ny
-    }
     out.push({ t: 'text', layer: 'COTATIONS', color: BYLAYER, x: mx + nx * 1.8 * k, y: my + ny * 1.8 * k, h: 2 * k, rot: readableAngle(Math.atan2(y1 - y0, x1 - x0)), text: len.toFixed(2), ha: 1, va: 2 })
   }
   return out
@@ -252,7 +249,8 @@ export function terrainFromDrawing(ed: Editor): { points: TerrainPoint[]; breakl
 /** MNT du dessin (lignes de rupture comprises), ou erreur explicite. */
 export function drawingTin(ed: Editor): Tin {
   const t = terrainFromDrawing(ed)
-  const tin = buildTin(t.points, { breaklines: t.breaklines })
+  // Emprise : toute l'enveloppe des points, comme Covadis.
+  const tin = buildTin(t.points, { breaklines: t.breaklines, maxEdge: Infinity })
   if (!tin) throw new Error(`Il faut au moins trois points cotés visibles (trouvés : ${t.points.length}).`)
   for (const c of tin.conflicts) ed.message('⚠ ' + c)
   return tin
@@ -864,7 +862,7 @@ export const GEOMETRY_COMMANDS: CommandDef[] = [
     menu: 'Topo 2D',
     ribbon: ['Topographie', 'Habillage'],
     icon: 'number',
-    tip: 'Numérote les sommets d’une parcelle (B.1, B.2…) et peut y placer un symbole de borne.',
+    tip: 'Numérote les sommets d’une parcelle (B.1, B.2…), noms écrits à l’intérieur, et peut y placer un symbole de borne.',
     steps: ['Cliquez la parcelle (polygone ou polyligne).', 'Validez ou modifiez le préfixe (B.) et le premier numéro.', 'Choisissez d’insérer ou non un symbole de borne sur chaque sommet.'],
     async run(ed) {
       const [s] = await ed.select('Sélectionnez la parcelle', { single: true, filter: (x) => !!vertices(ed.entity(x)) })
@@ -874,16 +872,15 @@ export const GEOMETRY_COMMANDS: CommandDef[] = [
       const start = Math.round(await ed.number('Premier numéro', 1))
       const sym = await ed.choice('Insérer un symbole de borne sur chaque sommet ?', yesNo, 'O')
       const n = v.pts.length / 2
-      const c = centroid(v.pts)
+      const inward = inwardFrames(v.pts).vertex
       const k = ed.k
       const ents: Entity[] = []
       for (let i = 0; i < n; i++) {
         const x = v.pts[i * 2]
         const y = v.pts[i * 2 + 1]
-        const dx = x - c[0]
-        const dy = y - c[1]
-        const d = Math.hypot(dx, dy) || 1
-        ents.push({ t: 'text', layer: 'SOMMETS', color: BYLAYER, x: x + (dx / d) * 3 * k, y: y + (dy / d) * 3 * k, h: 2.2 * k, rot: 0, text: prefix + (start + i), ha: 1, va: 2 })
+        // Nom de la borne à l'intérieur de la parcelle, sur la bissectrice de l'angle.
+        const [ux, uy] = inward[i]
+        ents.push({ t: 'text', layer: 'SOMMETS', color: BYLAYER, x: x + ux * 3 * k, y: y + uy * 3 * k, h: 2.2 * k, rot: 0, text: prefix + (start + i), ha: 1, va: 2 })
         if (sym === 'O') ents.push({ t: 'insert', layer: 'BORNES', color: BYLAYER, block: 'SYM_BORNE', x, y, sx: k, sy: k, rot: 0, props: { BORNE: prefix + (start + i) } })
       }
       ed.add('Numérotation des sommets', ents, { blocks: sym === 'O' ? [symbolBlock('borne')] : [], layers: [['SOMMETS', 0xff0000], ['BORNES', 0xff0000]] })
@@ -1012,23 +1009,37 @@ export const GEOMETRY_COMMANDS: CommandDef[] = [
       const tin = drawingTin(ed)
       const interval = await ed.number('Équidistance (m)', 1, { positive: true })
       const major = Math.max(1, Math.round(await ed.number('Une courbe maîtresse toutes les', 5, { positive: true })))
+      const colors = await ed.choice('Couleurs', [['D', 'Dégradé selon la cote'], ['M', 'Maîtresses rouges, intermédiaires orange']], 'D')
+      const minorLabels = (await ed.choice('Coter aussi les courbes intermédiaires ?', yesNo, 'N')) === 'O'
+      const cutWalls = (await ed.choice('Interrompre les courbes sur les faces de murs (pente > 300 %) ?', yesNo, 'N')) === 'O'
       const k = ed.k
       const ents: Entity[] = []
-      const list = contours(tin, interval)
+      const list = contours(tin, interval, { maxSlope: cutWalls ? 3 : 0 })
       const decimals = intervalDecimals(interval)
+      const majorDecimals = intervalDecimals(interval * major)
+      let zmin = Infinity
+      let zmax = -Infinity
+      for (const z of tin.zs) {
+        zmin = Math.min(zmin, z)
+        zmax = Math.max(zmax, z)
+      }
       for (const c of list) {
         const isMajor = Math.round(c.z / interval) % major === 0
-        const p = c.pts
-        ents.push({ t: 'pline', layer: isMajor ? 'COURBES_MAITRESSES' : 'COURBES', color: BYLAYER, pts: Float64Array.from(p), closed: c.closed, elev: c.z, props: { ALTITUDE: c.z } })
-        const n = p.length / 2
-        if (isMajor && n >= 4) {
-          const i = (n >> 1) * 2
-          ents.push({ t: 'text', layer: 'COURBES_MAITRESSES', color: BYLAYER, x: p[i], y: p[i + 1], h: 1.4 * k, rot: readableAngle(Math.atan2(p[i + 1] - p[i - 1], p[i] - p[i - 2])), text: c.z.toFixed(decimals), ha: 1, va: 2 })
-        }
+        const layer = isMajor ? 'COURBES_MAITRESSES' : 'COURBES'
+        const color = colors === 'D' ? elevationColor(c.z, zmin, zmax) : BYLAYER
+        const props = { ALTITUDE: c.z }
+        if (isMajor || minorLabels) {
+          const label = c.z.toFixed(isMajor ? majorDecimals : decimals)
+          const h = 1.5 * k
+          const lab = labelContour(c.pts, c.closed, { spacing: 80 * k, textLength: approxTextWidth(label, h) * 1.05, gap: 0.6 * k })
+          const pieces = lab.labels.length ? lab.pieces : [c.pts]
+          for (const piece of pieces) ents.push({ t: 'pline', layer, color, pts: Float64Array.from(piece), closed: !lab.labels.length && c.closed, elev: c.z, props })
+          for (const l of lab.labels) ents.push({ t: 'text', layer, color, x: l.x, y: l.y, h, rot: l.rot, text: label, ha: 1, va: 2 })
+        } else ents.push({ t: 'pline', layer, color, pts: Float64Array.from(c.pts), closed: c.closed, elev: c.z, props })
       }
       ed.add('Courbes de niveau', ents, { layers: [['COURBES', 0xff9f00], ['COURBES_MAITRESSES', 0xff0000]] })
       const check = checkContours(tin, list)
-      ed.message(`${ents.filter((e) => e.t === 'pline').length} courbe(s) tracée(s), équidistance ${fmt(interval)} m, ${tin.constrained} segment(s) de rupture. Contrôle : ${check.vertices} sommets, écart maximal au MNT ${check.maxError.toExponential(1)} m, ${check.crossings} croisement.`)
+      ed.message(`${list.length} courbe(s) tracée(s), équidistance ${fmt(interval)} m, ${tin.constrained} segment(s) de rupture. Contrôle : ${check.vertices} sommets, écart maximal au MNT ${check.maxError.toExponential(1)} m, ${check.crossings} croisement.`)
     },
   },
   // --- Édition -----------------------------------------------------------------------------

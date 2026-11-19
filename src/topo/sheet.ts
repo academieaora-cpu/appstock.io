@@ -391,14 +391,19 @@ function drawTable(p: Painter, vertices: TableRow[], right: number, bottom: numb
   return box
 }
 
-function drawLegend(p: Painter, legend: LegendItem[], x: number, bottom: number, k: number, opts: Pick<DrawOptions, 'foreground' | 'lightBackground' | 'monochrome'>): void {
-  if (!legend.length) return
+function legendSize(p: Painter, legend: LegendItem[], k: number): [number, number] {
   const rowH = 4.6 * k
   const cap = 1.9 * k
   let width = p.textWidth('Légende', cap, true)
   for (const it of legend) width = Math.max(width, p.textWidth(plain(it.label), cap))
-  const w = width + 16 * k
-  const h = rowH * (legend.length + 1) + 2 * k
+  return [width + 16 * k, rowH * (legend.length + 1) + 2 * k]
+}
+
+function drawLegend(p: Painter, legend: LegendItem[], x: number, bottom: number, k: number, opts: Pick<DrawOptions, 'foreground' | 'lightBackground' | 'monochrome'>): void {
+  if (!legend.length) return
+  const rowH = 4.6 * k
+  const cap = 1.9 * k
+  const [w, h] = legendSize(p, legend, k)
   const box = { x, y: bottom - h, w, h }
   whiteBox(p, box)
   rect(p, box, 0.3)
@@ -620,14 +625,17 @@ export function drawSheet(p: Painter, spec: SheetSpec, content: SheetContent): S
     const nearestFree = (w0: number, h0: number, px: number, py: number): [number, number] => {
       const inside = (x: number, y: number) => x >= frame.x + 2 * k && x + w0 <= frame.x + frame.w - 2 * k && y >= bandBottom + 2 * k && y + h0 <= frame.y + frame.h - 2 * k
       if (inside(px, py) && free({ x: px, y: py, w: w0, h: h0 })) return [px, py]
+      // Place libre la plus proche ; à défaut, celle qui recouvre le moins la parcelle et les autres éléments.
+      const overlap = (r: Rect) => obstacles.reduce((a, o) => a + Math.max(0, Math.min(r.x + r.w, o.x + o.w) - Math.max(r.x, o.x)) * Math.max(0, Math.min(r.y + r.h, o.y + o.h) - Math.max(r.y, o.y)), 0)
       let best: [number, number] | null = null
-      let bestD = Infinity
+      let bestKey = Infinity
       const step = 2.5 * k
       for (let y = bandBottom + 2 * k; y + h0 <= frame.y + frame.h - 2 * k; y += step) {
         for (let x = frame.x + 2 * k; x + w0 <= frame.x + frame.w - 2 * k; x += step) {
-          const d = (x - px) ** 2 + (y - py) ** 2
-          if (d < bestD && free({ x, y, w: w0, h: h0 })) {
-            bestD = d
+          const d = Math.hypot(x - px, y - py)
+          const key = overlap({ x, y, w: w0, h: h0 }) * 1e6 + d
+          if (key < bestKey) {
+            bestKey = key
             best = [x, y]
           }
         }
@@ -650,16 +658,20 @@ export function drawSheet(p: Painter, spec: SheetSpec, content: SheetContent): S
       line(p, xc - tw / 2, y + 1.3 * k, xc + tw / 2, y + 1.3 * k, 0.4)
       obstacles.push(boxAt([xc, y]))
     }
+    if (spec.showLegend && content.legend.length) {
+      const [lw, lh] = legendSize(p, content.legend, k)
+      const [lx, ly] = nearestFree(lw, lh, frame.x + 5 * k, frame.y + frame.h - 5 * k - lh)
+      drawLegend(p, content.legend, lx, ly + lh, k, colors)
+      obstacles.push({ x: lx, y: ly, w: lw, h: lh })
+    }
     const rows = content.table?.length ? content.table : content.parcel?.vertices
     if (spec.showTable && rows?.length) {
       const st: TableStyle = { rowH: 2.4 * k, cap: 1.65 * k, widths: [8 * k, 18.3 * k, 18.3 * k], head: 'MAT', decimals: spec.coordDecimals ?? 3 }
       const tw = st.widths[0] + st.widths[1] + st.widths[2]
       const th = st.rowH * (Math.min(rows.length, Math.floor((frame.h * 0.55) / st.rowH) - 2) + 2)
-      if (spec.showLegend && content.legend.length) obstacles.push({ x: frame.x, y: frame.y + frame.h - (4.6 * (content.legend.length + 1) + 7) * k, w: 70 * k, h: (4.6 * (content.legend.length + 1) + 7) * k })
       const [tx, ty] = nearestFree(tw, th, frame.x + frame.w - 10.3 * k - tw, frame.y + frame.h * 0.842 - th)
       drawTable(p, rows, tx + tw, ty + th, st, frame.h * 0.55)
     }
-    if (spec.showLegend) drawLegend(p, content.legend, frame.x + 5 * k, frame.y + frame.h - 5 * k, k, colors)
     return g
   }
 
