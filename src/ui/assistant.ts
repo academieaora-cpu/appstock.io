@@ -5,7 +5,7 @@
  */
 import { detectCrs, type CrsCandidate } from '../core/crs'
 import type { Item, Project } from '../core/project'
-import { DEFAULT_RULES, loadRules, matchCode, normalizeCode, saveRules, summarizeCodes, type CodeRule } from '../topo/codes'
+import { DEFAULT_RULES, codeKey, inTinRule, isBreaklineRule, loadRules, matchCode, normalizeCode, saveRules, summarizeCodes, type CodeRule } from '../topo/codes'
 import { DEFAULT_PLAN, generatePlan, type PlanOptions, type PlanResult } from '../topo/generate'
 import { parcelProposals, crossings, signedArea, type BorneVertex, type ParcelProposal } from '../topo/parcel'
 import { checkPoints, cleaningFlags, delimiterName, parsePointsText, sourceDecimals, type CleanAction, type ColumnMap, type PointsFile, type SurveyPoint } from '../topo/points'
@@ -125,8 +125,6 @@ export interface AssistantResult {
 const IGNORE = '__ignorer'
 const SIMPLE = ''
 
-/** Clé d'un code pour le dictionnaire : sans suffixe numérique (BAT1 → BAT). */
-const codeKey = (raw: string) => normalizeCode(raw).replace(/\d+$/, '') || normalizeCode(raw)
 
 /** Petit aperçu du contour (SVG), bornes nommées, côtés qui se croisent en rouge. */
 function parcelPreview(vertices: BorneVertex[]): SVGSVGElement {
@@ -195,6 +193,9 @@ export function openAssistant(project: Project, source: { name: string; text: st
   // Codes : choix de l'utilisateur par code (clé sans suffixe)
   let choices = new Map<string, string>()
   let codesValidated = false
+  // MNT : participation des points et lignes de rupture, par code
+  let tinChoice = new Map<string, boolean>()
+  let breakChoice = new Map<string, boolean>()
   // Parcelle
   let parcelMode = ''
   let manualOrder = ''
@@ -209,6 +210,8 @@ export function openAssistant(project: Project, source: { name: string; text: st
     cleanValidated = false
     choices = new Map()
     codesValidated = false
+    tinChoice = new Map()
+    breakChoice = new Map()
     parcelMode = ''
     manualOrder = ''
   }
@@ -289,6 +292,10 @@ export function openAssistant(project: Project, source: { name: string; text: st
     eff = [...front, ...eff.filter((r) => !front.includes(r))]
     return eff
   }
+
+  const ruleFor = (rawCode: string) => rules.find((r) => r.code === choiceFor(rawCode))
+  const inTinFor = (rawCode: string) => tinChoice.get(codeKey(rawCode)) ?? (ruleFor(rawCode) ? inTinRule(ruleFor(rawCode)!) : true)
+  const breakFor = (rawCode: string) => breakChoice.get(codeKey(rawCode)) ?? (ruleFor(rawCode) ? isBreaklineRule(ruleFor(rawCode)!) : false)
 
   /** Points à dessiner : nettoyés, sans les codes « ne pas dessiner ». */
   const drawnPoints = (): SurveyPoint[] => cleanedPoints().filter((p) => !p.code.trim() || choiceFor(p.code) !== IGNORE)
@@ -442,7 +449,7 @@ export function openAssistant(project: Project, source: { name: string; text: st
         h(
           'table',
           { class: 'grid' },
-          h('thead', null, h('tr', null, h('th', null, 'Code du fichier'), h('th', null, 'Points'), h('th', null, 'Attribuer à'), h('th', null, 'Proposition'))),
+          h('thead', null, h('tr', null, h('th', null, 'Code du fichier'), h('th', null, 'Points'), h('th', null, 'Attribuer à'), h('th', { title: 'Les points de ce code entrent dans le modèle de terrain (décochez un point qui n’est pas au sol)' }, 'MNT'), h('th', { title: 'Les lignes de ce code sont des lignes de rupture : aucun triangle ne les traverse' }, 'Rupture'), h('th', null, 'Proposition'))),
           h(
             'tbody',
             null,
@@ -466,13 +473,33 @@ export function openAssistant(project: Project, source: { name: string; text: st
                       })
                     : 'Point levé',
                 ),
+                h('td', null, (() => {
+                  const cb = h('input', { type: 'checkbox', checked: c.raw ? inTinFor(c.raw) : true, disabled: !c.raw }) as HTMLInputElement
+                  cb.addEventListener('change', () => {
+                    tinChoice.set(codeKey(c.raw), cb.checked)
+                    codesValidated = false
+                    render()
+                  })
+                  return cb
+                })()),
+                h('td', null, (() => {
+                  const kind = ruleFor(c.raw)?.kind
+                  if (!c.raw || (kind !== 'ligne' && kind !== 'surface')) return '—'
+                  const cb = h('input', { type: 'checkbox', checked: breakFor(c.raw) }) as HTMLInputElement
+                  cb.addEventListener('change', () => {
+                    breakChoice.set(codeKey(c.raw), cb.checked)
+                    codesValidated = false
+                    render()
+                  })
+                  return cb
+                })()),
                 h('td', null, user ? h('span', { class: 'badge ok' }, 'votre choix') : h('span', { class: 'badge ' + (c.match.quality === 'exact' ? 'ok' : c.match.quality === 'approx' ? 'warn' : c.match.quality === 'inconnu' ? 'err' : '') }, { exact: 'reconnu', approx: 'approché — à vérifier', inconnu: 'inconnu — à attribuer', vide: 'sans code' }[c.match.quality])),
               )
             }),
           ),
         ),
       ),
-      h('p', { class: 'muted' }, 'Les points d’un même code sont reliés dans l’ordre du fichier (ou par suffixe : BAT1, BAT2…). Rien n’est dessiné avant votre validation ; vos choix rejoignent alors votre dictionnaire.'),
+      h('p', { class: 'muted' }, 'Les points d’un même code sont reliés dans l’ordre du fichier (ou par suffixe : BAT1, BAT2…). « MNT » : le point entre dans le modèle de terrain (décochez les points qui ne sont pas au sol). « Rupture » : la ligne est imposée dans le MNT, aucun triangle ne la traverse (talus, fossés, bords de route). Rien n’est dessiné avant votre validation ; vos choix rejoignent alors votre dictionnaire.'),
       h(
         'div',
         { class: 'actions' },
@@ -480,6 +507,14 @@ export function openAssistant(project: Project, source: { name: string; text: st
           // Le dictionnaire mémorise les choix validés.
           const eff = effectiveRules(pts)
           rules = eff.filter((r) => rules.some((x) => x.code === r.code))
+          // Les choix MNT et rupture portent sur l'objet attribué : ils rejoignent le dictionnaire.
+          for (const c of rows) {
+            if (!c.raw) continue
+            const r = rules.find((x) => x.code === choiceFor(c.raw))
+            if (!r) continue
+            if (tinChoice.has(codeKey(c.raw))) r.inTin = tinChoice.get(codeKey(c.raw))
+            if (breakChoice.has(codeKey(c.raw))) r.breakline = breakChoice.get(codeKey(c.raw))
+          }
           saveRules(rules)
           for (const c of rows) if (c.raw) choices.set(codeKey(c.raw), choiceFor(c.raw))
           codesValidated = true
@@ -569,6 +604,7 @@ export function openAssistant(project: Project, source: { name: string; text: st
         field('Échelle du dessin', select(SCALES.map((s) => [String(s), '1/' + s]), String(SCALES.includes(options.scale) ? options.scale : 500), (v) => (options.scale = Number(v)))),
         field('Équidistance des courbes (m)', h('input', { type: 'number', min: 0, step: 0.25, value: options.contourInterval, onchange: (e: Event) => (options.contourInterval = Math.max(0, parseFloat((e.target as HTMLInputElement).value) || 0)) }), '0 = pas de courbes'),
         field('Courbe maîtresse toutes les', h('input', { type: 'number', min: 1, step: 1, value: options.majorEvery, onchange: (e: Event) => (options.majorEvery = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 5)) })),
+        field('Côté maximal des triangles (m)', h('input', { type: 'number', min: 0, step: 1, value: options.maxEdge ?? 0, onchange: (e: Event) => (options.maxEdge = Math.max(0, parseFloat((e.target as HTMLInputElement).value) || 0)) }), '0 = automatique (6 × la médiane) : pas d’interpolation à travers les zones non levées'),
       ),
       h(
         'div',
@@ -582,7 +618,7 @@ export function openAssistant(project: Project, source: { name: string; text: st
         }),
         checkbox('Longueurs des côtés', options.sideLengths, (v) => (options.sideLengths = v)),
         checkbox('Triangulation visible', options.showTin, (v) => (options.showTin = v)),
-        checkbox('Lisser les courbes', options.smoothContours, (v) => (options.smoothContours = v)),
+        checkbox('Lisser les courbes (affichage, écart chiffré)', options.smoothContours, (v) => (options.smoothContours = v)),
       ),
       h('h3', null, 'Semis de points (options de chargement, comme dans Covadis)'),
       h(
@@ -635,7 +671,10 @@ export function openAssistant(project: Project, source: { name: string; text: st
     const pts = drawnPoints()
     const eff = effectiveRules(pts)
     const par = currentParcel()
-    const plan = generatePlan(pts, eff, { ...options, parcelVertices: par?.chosen ?? undefined }, name.replace(/\.[^.]+$/, '') + '_plan')
+    const keys = [...new Set(pts.filter((p) => p.code.trim()).map((p) => p.code))]
+    const noTinCodes = [...new Set(keys.filter((c) => !inTinFor(c)).map(codeKey))]
+    const breaklineCodes = [...new Set(keys.filter((c) => breakFor(c)).map(codeKey))]
+    const plan = generatePlan(pts, eff, { ...options, parcelVertices: par?.chosen ?? undefined, noTinCodes, breaklineCodes }, name.replace(/\.[^.]+$/, '') + '_plan')
     const excluded = file.points.length - cleanedPoints().length
     const ignored = cleanedPoints().length - pts.length
     if (excluded || ignored) plan.report.unshift({ level: 'alerte', message: `Nettoyage validé : ${excluded} point(s) exclu(s)${ignored ? `, ${ignored} point(s) aux codes « ne pas dessiner »` : ''}${[...decisions.values()].some((d) => d === 'sans-altitude') ? ', altitudes ignorées pour les points signalés' : ''}.` })

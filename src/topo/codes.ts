@@ -22,6 +22,10 @@ export interface CodeRule {
   synonyms: string[]
   /** Épaisseur du trait en mm. */
   lw: number
+  /** Les lignes de ce code sont des lignes de rupture du MNT (talus, fossé, bord de route…). */
+  breakline?: boolean
+  /** Les points de ce code entrent dans le MNT (faux pour un point qui n'est pas au sol). */
+  inTin?: boolean
 }
 
 export const DEFAULT_RULES: CodeRule[] = [
@@ -30,13 +34,13 @@ export const DEFAULT_RULES: CodeRule[] = [
   { code: 'BAT', label: 'Bâtiment', kind: 'surface', layer: '07_BATIMENTS', color: 0x000000, symbol: 'croix', synonyms: ['BATIMENT', 'BATI', 'MAISON', 'CONST'], lw: 0.35 },
   { code: 'MUR', label: 'Mur', kind: 'ligne', layer: '08_CLOTURES', color: 0x7f3f00, symbol: 'croix', synonyms: ['MURET'], lw: 0.35 },
   { code: 'CL', label: 'Clôture', kind: 'ligne', layer: '08_CLOTURES', color: 0x7f3f00, symbol: 'croix', synonyms: ['CLOTURE', 'CLOT', 'HAIE', 'GRILLAGE'], lw: 0.25 },
-  { code: 'AXE', label: 'Axe de route', kind: 'ligne', layer: '09_VOIRIES', color: 0x0000ff, symbol: 'croix', synonyms: ['AXEROUTE', 'AX'], lw: 0.18 },
-  { code: 'ROUTE', label: 'Bord de chaussée', kind: 'ligne', layer: '09_VOIRIES', color: 0x000000, symbol: 'croix', synonyms: ['RTE', 'CHAUSSEE', 'BORD', 'BC', 'PISTE', 'VOIE'], lw: 0.35 },
-  { code: 'CAN', label: 'Caniveau', kind: 'ligne', layer: '09_VOIRIES', color: 0x007fff, symbol: 'croix', synonyms: ['CANIVEAU'], lw: 0.25 },
-  { code: 'FOS', label: 'Fossé', kind: 'ligne', layer: '09_VOIRIES', color: 0x007fff, symbol: 'croix', synonyms: ['FOSSE'], lw: 0.25 },
-  { code: 'TAL', label: 'Talus', kind: 'ligne', layer: '09_TALUS', color: 0x7f7f00, symbol: 'croix', synonyms: ['TALUS'], lw: 0.25 },
-  { code: 'SOM', label: 'Sommet de talus', kind: 'ligne', layer: '09_TALUS', color: 0x7f7f00, symbol: 'croix', synonyms: ['SOMMET', 'HT', 'HAUT'], lw: 0.25 },
-  { code: 'PIED', label: 'Pied de talus', kind: 'ligne', layer: '09_TALUS', color: 0x7f7f00, symbol: 'croix', synonyms: ['PT', 'BAS', 'PIEDTALUS'], lw: 0.18 },
+  { code: 'AXE', label: 'Axe de route', kind: 'ligne', layer: '09_VOIRIES', color: 0x0000ff, symbol: 'croix', synonyms: ['AXEROUTE', 'AX'], lw: 0.18, breakline: true },
+  { code: 'ROUTE', label: 'Bord de chaussée', kind: 'ligne', layer: '09_VOIRIES', color: 0x000000, symbol: 'croix', synonyms: ['RTE', 'CHAUSSEE', 'BORD', 'BC', 'PISTE', 'VOIE'], lw: 0.35, breakline: true },
+  { code: 'CAN', label: 'Caniveau', kind: 'ligne', layer: '09_VOIRIES', color: 0x007fff, symbol: 'croix', synonyms: ['CANIVEAU'], lw: 0.25, breakline: true },
+  { code: 'FOS', label: 'Fossé', kind: 'ligne', layer: '09_VOIRIES', color: 0x007fff, symbol: 'croix', synonyms: ['FOSSE'], lw: 0.25, breakline: true },
+  { code: 'TAL', label: 'Talus', kind: 'ligne', layer: '09_TALUS', color: 0x7f7f00, symbol: 'croix', synonyms: ['TALUS'], lw: 0.25, breakline: true },
+  { code: 'SOM', label: 'Sommet de talus', kind: 'ligne', layer: '09_TALUS', color: 0x7f7f00, symbol: 'croix', synonyms: ['SOMMET', 'HT', 'HAUT'], lw: 0.25, breakline: true },
+  { code: 'PIED', label: 'Pied de talus', kind: 'ligne', layer: '09_TALUS', color: 0x7f7f00, symbol: 'croix', synonyms: ['PT', 'BAS', 'PIEDTALUS'], lw: 0.18, breakline: true },
   { code: 'ARB', label: 'Arbre', kind: 'point', layer: '10_VEGETATION', color: 0x007f00, symbol: 'arbre', synonyms: ['ARBRE', 'PALMIER', 'MANGUIER'], lw: 0.25 },
   { code: 'POT', label: 'Poteau', kind: 'point', layer: '10_RESEAUX', color: 0xff00ff, symbol: 'poteau', synonyms: ['POTEAU', 'PTT', 'PE'], lw: 0.25 },
   { code: 'ELEC', label: 'Réseau électrique', kind: 'point', layer: '10_RESEAUX', color: 0xff00ff, symbol: 'poteau', synonyms: ['ELECTRICITE', 'ENEO', 'BT', 'HTA'], lw: 0.25 },
@@ -44,6 +48,23 @@ export const DEFAULT_RULES: CodeRule[] = [
   { code: 'REG', label: 'Regard', kind: 'point', layer: '10_RESEAUX', color: 0x0000ff, symbol: 'carre', synonyms: ['REGARD', 'RV'], lw: 0.25 },
   { code: 'TN', label: 'Terrain naturel', kind: 'point', layer: '01_POINTS', color: 0x000000, symbol: 'croix', synonyms: ['TERRAIN', 'SOL', 'PTN', 'COTE', 'SEMIS'], lw: 0.18 },
 ]
+
+/** Ligne de rupture : choix de l'utilisateur, sinon valeur par défaut du code. */
+export function isBreaklineRule(r: CodeRule): boolean {
+  if (r.breakline !== undefined) return r.breakline
+  return DEFAULT_RULES.find((d) => d.code === r.code)?.breakline ?? false
+}
+
+/** Le point entre-t-il dans le MNT ? Oui par défaut. */
+export function inTinRule(r: CodeRule): boolean {
+  return r.inTin !== false
+}
+
+/** Clé d'un code pour le dictionnaire : sans suffixe numérique (BAT1 → BAT). */
+export function codeKey(raw: string): string {
+  const n = normalizeCode(raw)
+  return n.replace(/\d+$/, '') || n
+}
 
 export const UNKNOWN_RULE: CodeRule = { code: '?', label: 'Code non reconnu', kind: 'point', layer: '01_POINTS', color: 0x000000, symbol: 'croix', synonyms: [], lw: 0.18 }
 export const NOCODE_RULE: CodeRule = { code: '', label: 'Point levé', kind: 'point', layer: '01_POINTS', color: 0x000000, symbol: 'croix', synonyms: [], lw: 0.18 }

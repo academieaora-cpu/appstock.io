@@ -88,6 +88,16 @@ const GUIDES: Guide[] = [
     ],
   },
   {
+    id: 'precision',
+    title: 'Précision du MNT et des courbes de niveau',
+    body: [
+      'Le modèle de terrain est une triangulation de Delaunay aux calculs exacts, contrainte par les lignes de rupture, avec interpolation linéaire sur chaque triangle : la méthode des MNT de Covadis et de Civil 3D. Les courbes sont l’intersection exacte des triangles et des plans horizontaux.',
+      ['Pour des courbes justes', ['levez les ruptures en 3D (sommet et pied de talus, bords de route, fossés, caniveaux) et cochez « Rupture » pour leurs codes : aucun triangle ne les traverse ;', 'décochez « MNT » pour les codes de points qui ne sont pas au sol ;', 'laissez « Lisser les courbes » décoché pour un tracé strictement exact ; coché, la courbe passe par les sommets exacts et l’écart entre eux est indiqué.']],
+      ['Contrôle automatique', ['après chaque calcul, le rapport donne le nombre de sommets vérifiés, l’écart maximal au MNT (de l’ordre de 10⁻¹¹ m, la limite du calcul) et le nombre de croisements (toujours 0) ;', 'les conflits sont signalés : deux altitudes au même endroit, ruptures qui se croisent ou passent sur un point.']],
+      'Entre deux points levés, aucun logiciel ne connaît le terrain : la justesse du plan dépend de la densité des points et des ruptures levées.',
+    ],
+  },
+  {
     id: 'scripts',
     title: 'Automatiser avec un script',
     body: [

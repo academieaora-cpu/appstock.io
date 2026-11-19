@@ -8,8 +8,7 @@ import type { Item } from '../core/project'
 import { FOREGROUND, type Color, type EText, type Entity } from '../core/types'
 import { cutFill, divideParallel, dividePivot, drape, gridStep, gridValues, longProfile, signedArea, stakeout, tabulate, talusHachures, type Division } from '../topo/calc'
 import { formatArea } from '../topo/sheet'
-import { buildTin } from '../topo/tin'
-import { points3d } from './commands'
+import { drawingTin } from './commands'
 import { edgePrims, extendEntity, filletLines, filletPolyline, toPrims, trimEntity, type Prim } from './curves'
 import { fmt, type CommandDef, type Editor, type Keyword } from './editor'
 import { centroid, closedRing, vertices, type Pt } from './ops'
@@ -432,9 +431,7 @@ export const ADVANCED_COMMANDS: CommandDef[] = [
       'Le résultat s’affiche ; il peut être inscrit sur le plan. La partie d’un contour hors du MNT n’est pas calculée et est signalée.',
     ],
     async run(ed) {
-      const pts = points3d(ed)
-      const tin = buildTin(pts)
-      if (!tin) throw new Error(`Il faut au moins trois points cotés visibles (trouvés : ${pts.length}).`)
+      const tin = drawingTin(ed)
       let zsum = 0
       for (const z of tin.zs) zsum += z
       const platform = await ed.number('Altitude de la plateforme (m)', Number((zsum / tin.zs.length).toFixed(2)))
@@ -485,9 +482,7 @@ export const ADVANCED_COMMANDS: CommandDef[] = [
       'Cliquez l’emplacement du profil (origine du plan de comparaison).',
     ],
     async run(ed) {
-      const pts = points3d(ed)
-      const tin = buildTin(pts)
-      if (!tin) throw new Error(`Il faut au moins trois points cotés visibles (trouvés : ${pts.length}).`)
+      const tin = drawingTin(ed)
       const [s] = await ed.select('Axe du profil', { single: true, editable: false, filter: (x) => { const e = ed.entity(x); return e.t === 'line' || e.t === 'pline' } })
       const v = vertices(ed.entity(s))!
       const toP = toProjectFn(ed.project, s.item)
@@ -575,9 +570,7 @@ export const ADVANCED_COMMANDS: CommandDef[] = [
       'Cliquez l’emplacement de la planche : les profils sont rangés en lignes de quatre.',
     ],
     async run(ed) {
-      const pts = points3d(ed)
-      const tin = buildTin(pts)
-      if (!tin) throw new Error(`Il faut au moins trois points cotés visibles (trouvés : ${pts.length}).`)
+      const tin = drawingTin(ed)
       const [s] = await ed.select('Axe', { single: true, editable: false, filter: (x) => { const e = ed.entity(x); return e.t === 'line' || e.t === 'pline' } })
       const v = vertices(ed.entity(s))!
       const toP = toProjectFn(ed.project, s.item)
@@ -650,9 +643,7 @@ export const ADVANCED_COMMANDS: CommandDef[] = [
     tip: 'Donne aux lignes et polylignes 2D l’altitude du terrain (MNT des points cotés visibles) : polylignes 3D, avec si besoin les points de cassure du terrain.',
     steps: ['Affichez les points cotés.', 'Désignez les lignes ou polylignes puis Entrée.', 'Répondez Oui pour ajouter un sommet à chaque arête du MNT franchie (profil exact du terrain).', 'Un objet dont un sommet est hors du MNT est laissé tel quel (signalé).'],
     async run(ed) {
-      const pts = points3d(ed)
-      const tin = buildTin(pts)
-      if (!tin) throw new Error(`Il faut au moins trois points cotés visibles (trouvés : ${pts.length}).`)
+      const tin = drawingTin(ed)
       const sel = await ed.select('Lignes ou polylignes à transformer', { filter: (x) => { const e = ed.entity(x); return e.t === 'line' || (e.t === 'pline' && !e.bulges?.some((b) => b !== 0)) } })
       const breaks = (await ed.choice('Ajouter les points de cassure du terrain ?', yesNo, 'O')) === 'O'
       const changes = new Map<Item, { replace: Map<number, Entity> }>()
@@ -694,9 +685,7 @@ export const ADVANCED_COMMANDS: CommandDef[] = [
     tip: 'Résume le modèle de terrain des points cotés visibles : nombre de points et de triangles, altitudes extrêmes, surfaces plane et réelle, triangles de bordure écartés.',
     steps: ['Affichez les points cotés puis lancez la commande ; le résumé s’affiche dans la ligne de commande.'],
     run(ed) {
-      const pts = points3d(ed)
-      const tin = buildTin(pts)
-      if (!tin) throw new Error(`Il faut au moins trois points cotés visibles (trouvés : ${pts.length}).`)
+      const tin = drawingTin(ed)
       const { xs, ys, zs, triangles } = tin
       let a2 = 0
       let a3 = 0

@@ -9,7 +9,7 @@ import type { Item } from '../core/project'
 import { BYBLOCK, FOREGROUND, type Block, type Color, type EText, type Entity } from '../core/types'
 import { symbolBlock, tcpointBlock } from '../topo/generate'
 import { formatArea } from '../topo/sheet'
-import { buildTin, contours, smooth } from '../topo/tin'
+import { buildTin, checkContours, contours, intervalDecimals, type TerrainPoint, type Tin } from '../topo/tin'
 import { Cancelled, fmt, parseNumber, type CommandDef, type Editor, type Ghost, type Keyword } from './editor'
 import {
   centroid,
@@ -210,9 +210,13 @@ function addTcpoints(ed: Editor, label: string, ents: Entity[]): void {
   ed.add(label, ents, { blocks: [tcpointBlock()], layers: TOPO_LAYERS })
 }
 
-/** Points cotés visibles (points, blocs à altitude, sommets de polylignes 3D), en coordonnées du projet. */
-export function points3d(ed: Editor): { x: number; y: number; z: number }[] {
-  const out: { x: number; y: number; z: number }[] = []
+/**
+ * Données de terrain du dessin : points cotés (points, points topographiques) et lignes de
+ * rupture (polylignes et lignes 3D visibles : talus, fossés, bords de route levés en 3D).
+ */
+export function terrainFromDrawing(ed: Editor): { points: TerrainPoint[]; breaklines: TerrainPoint[][] } {
+  const points: TerrainPoint[] = []
+  const breaklines: TerrainPoint[][] = []
   for (const item of ed.project.items) {
     if (!item.ds.visible) continue
     const toP = toProjectFn(ed.project, item)
@@ -220,26 +224,38 @@ export function points3d(ed: Editor): { x: number; y: number; z: number }[] {
       if (item.ds.layers.get(e.layer)?.visible === false || e.layer === 'MNT') continue
       if (e.t === 'point' && e.z !== undefined) {
         const p = toP(e.x, e.y)
-        out.push({ x: p[0], y: p[1], z: e.z })
+        points.push({ x: p[0], y: p[1], z: e.z })
       } else if (e.t === 'insert') {
         const raw = e.z ?? (e.props?.ALT !== undefined ? parseNumber(String(e.props.ALT)) : null)
         if (raw !== null && raw !== undefined && Number.isFinite(raw) && !e.mirror) {
           const p = toP(e.x, e.y)
-          out.push({ x: p[0], y: p[1], z: raw })
+          points.push({ x: p[0], y: p[1], z: raw, id: e.props?.MAT !== undefined ? String(e.props.MAT) : undefined })
         }
       } else if (e.t === 'pline' && e.zs) {
+        const line: TerrainPoint[] = []
         for (let i = 0; i < e.pts.length / 2; i++) {
           const p = toP(e.pts[i * 2], e.pts[i * 2 + 1])
-          out.push({ x: p[0], y: p[1], z: e.zs[i] })
+          line.push({ x: p[0], y: p[1], z: e.zs[i] })
         }
+        if (e.closed && line.length >= 3) line.push(line[0])
+        breaklines.push(line)
       } else if (e.t === 'line' && e.z1 !== undefined && e.z2 !== undefined) {
         const a = toP(e.x1, e.y1)
         const b = toP(e.x2, e.y2)
-        out.push({ x: a[0], y: a[1], z: e.z1 }, { x: b[0], y: b[1], z: e.z2 })
+        breaklines.push([{ x: a[0], y: a[1], z: e.z1 }, { x: b[0], y: b[1], z: e.z2 }])
       }
     }
   }
-  return out
+  return { points, breaklines }
+}
+
+/** MNT du dessin (lignes de rupture comprises), ou erreur explicite. */
+export function drawingTin(ed: Editor): Tin {
+  const t = terrainFromDrawing(ed)
+  const tin = buildTin(t.points, { breaklines: t.breaklines })
+  if (!tin) throw new Error(`Il faut au moins trois points cotés visibles (trouvés : ${t.points.length}).`)
+  for (const c of tin.conflicts) ed.message('⚠ ' + c)
+  return tin
 }
 
 // ---------------------------------------------------------------------------
@@ -970,9 +986,7 @@ export const GEOMETRY_COMMANDS: CommandDef[] = [
     tip: 'Triangule tous les points cotés visibles (points topo, polylignes 3D) et dessine le MNT.',
     steps: ['Affichez les fichiers et calques qui contiennent les points cotés.', 'Lancez la commande : la triangulation est dessinée sur le calque MNT.', 'Les grands triangles de bordure, hors levé, sont écartés.'],
     async run(ed) {
-      const pts = points3d(ed)
-      const tin = buildTin(pts)
-      if (!tin) throw new Error(`Il faut au moins trois points cotés visibles (trouvés : ${pts.length}).`)
+      const tin = drawingTin(ed)
       const ents: Entity[] = []
       const { xs, ys, zs, triangles } = tin
       for (let t = 0; t < triangles.length; t += 3) {
@@ -982,7 +996,7 @@ export const GEOMETRY_COMMANDS: CommandDef[] = [
         ents.push({ t: 'polygon', layer: 'MNT', color: BYLAYER, rings: [Float64Array.from([xs[a], ys[a], xs[b], ys[b], xs[c], ys[c]])], zs: [Float64Array.from([zs[a], zs[b], zs[c]])], filled: false })
       }
       ed.add('MNT', ents, { layers: [['MNT', 0x9a9a9a]] })
-      ed.message(`MNT : ${triangles.length / 3} triangles sur ${xs.length} points${tin.discarded ? ` (${tin.discarded} triangles de bordure écartés)` : ''}.`)
+      ed.message(`MNT : ${triangles.length / 3} triangles sur ${xs.length} sommets, ${tin.constrained} segment(s) de rupture imposé(s)${tin.discarded ? `, ${tin.discarded} triangle(s) de bordure écarté(s)` : ''}.`)
     },
   },
   {
@@ -992,28 +1006,29 @@ export const GEOMETRY_COMMANDS: CommandDef[] = [
     menu: 'Topo 3D',
     ribbon: ['Topographie', 'Terrain'],
     icon: 'contours',
-    tip: 'Calcule les courbes de niveau à partir des points cotés visibles, avec courbes maîtresses cotées.',
+    tip: 'Calcule les courbes de niveau exactes du MNT (points cotés et lignes de rupture 3D visibles), avec courbes maîtresses cotées et contrôle automatique.',
     steps: ['Tapez l’équidistance (par exemple 0.5 ou 1).', 'Tapez la fréquence des courbes maîtresses (5 = une sur cinq).', 'Les courbes sont dessinées sur les calques COURBES et COURBES_MAITRESSES.'],
     async run(ed) {
-      const pts = points3d(ed)
-      const tin = buildTin(pts)
-      if (!tin) throw new Error(`Il faut au moins trois points cotés visibles (trouvés : ${pts.length}).`)
+      const tin = drawingTin(ed)
       const interval = await ed.number('Équidistance (m)', 1, { positive: true })
       const major = Math.max(1, Math.round(await ed.number('Une courbe maîtresse toutes les', 5, { positive: true })))
       const k = ed.k
       const ents: Entity[] = []
-      for (const c of contours(tin, interval)) {
+      const list = contours(tin, interval)
+      const decimals = intervalDecimals(interval)
+      for (const c of list) {
         const isMajor = Math.round(c.z / interval) % major === 0
-        const p = smooth(c.pts, c.closed, 2)
+        const p = c.pts
         ents.push({ t: 'pline', layer: isMajor ? 'COURBES_MAITRESSES' : 'COURBES', color: BYLAYER, pts: Float64Array.from(p), closed: c.closed, elev: c.z, props: { ALTITUDE: c.z } })
         const n = p.length / 2
         if (isMajor && n >= 4) {
           const i = (n >> 1) * 2
-          ents.push({ t: 'text', layer: 'COURBES_MAITRESSES', color: BYLAYER, x: p[i], y: p[i + 1], h: 1.4 * k, rot: readableAngle(Math.atan2(p[i + 1] - p[i - 1], p[i] - p[i - 2])), text: c.z.toFixed(interval < 1 ? 2 : 1), ha: 1, va: 2 })
+          ents.push({ t: 'text', layer: 'COURBES_MAITRESSES', color: BYLAYER, x: p[i], y: p[i + 1], h: 1.4 * k, rot: readableAngle(Math.atan2(p[i + 1] - p[i - 1], p[i] - p[i - 2])), text: c.z.toFixed(decimals), ha: 1, va: 2 })
         }
       }
       ed.add('Courbes de niveau', ents, { layers: [['COURBES', 0xff9f00], ['COURBES_MAITRESSES', 0xff0000]] })
-      ed.message(`${ents.filter((e) => e.t === 'pline').length} courbe(s) tracée(s), équidistance ${fmt(interval)} m.`)
+      const check = checkContours(tin, list)
+      ed.message(`${ents.filter((e) => e.t === 'pline').length} courbe(s) tracée(s), équidistance ${fmt(interval)} m, ${tin.constrained} segment(s) de rupture. Contrôle : ${check.vertices} sommets, écart maximal au MNT ${check.maxError.toExponential(1)} m, ${check.crossings} croisement.`)
     },
   },
   // --- Édition -----------------------------------------------------------------------------

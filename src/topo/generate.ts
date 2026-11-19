@@ -10,9 +10,9 @@
 import { crossings, isBorneLabel, parcelProposals } from './parcel'
 import { ringArea } from '../core/geom'
 import { BYBLOCK, FOREGROUND, ensureLayer, newDataset, type Block, type Color, type Dataset, type EText, type Entity } from '../core/types'
-import { buildObjects, matchCode, type CodeRule, type SymbolName } from './codes'
+import { buildObjects, codeKey, inTinRule, isBreaklineRule, matchCode, type CodeRule, type SymbolName } from './codes'
 import type { SurveyPoint } from './points'
-import { buildTin, contours, smooth, type Tin } from './tin'
+import { buildTin, checkContours, contours, intervalDecimals, smooth, smoothingDeviation, type Tin } from './tin'
 
 export interface PlanOptions {
   /** Dénominateur de l'échelle (500 pour 1/500). */
@@ -26,6 +26,12 @@ export interface PlanOptions {
   parcelVertices?: { label: string; x: number; y: number }[]
   /** Décimales des coordonnées dans les tableaux (celles du fichier source par défaut). */
   coordDecimals?: number
+  /** Codes (clés sans suffixe) dont les points n'entrent pas dans le MNT ; sinon choix du dictionnaire. */
+  noTinCodes?: string[]
+  /** Codes (clés sans suffixe) dont les lignes sont des lignes de rupture ; sinon choix du dictionnaire. */
+  breaklineCodes?: string[]
+  /** Longueur maximale des côtés de triangles (m) ; 0 = automatique. */
+  maxEdge?: number
   sideLengths: boolean
   /** Équidistance des courbes de niveau en mètres (0 = pas de courbes). */
   contourInterval: number
@@ -54,7 +60,7 @@ export const DEFAULT_PLAN: PlanOptions = {
   sideLengths: true,
   contourInterval: 0,
   majorEvery: 5,
-  smoothContours: true,
+  smoothContours: false,
   showTin: false,
   altDecimals: 3,
   insert3d: true,
@@ -357,14 +363,36 @@ export function generatePlan(input: SurveyPoint[], rules: CodeRule[], options: P
   // --- Modèle de terrain et courbes de niveau -----------------------------
   let tin: Tin | null = null
   if (options.contourInterval > 0 || options.showTin) {
-    tin = buildTin(points)
+    const noTin = options.noTinCodes ? new Set(options.noTinCodes) : null
+    const inTin = (p: SurveyPoint) => {
+      if (noTin) return !noTin.has(codeKey(p.code))
+      const m = matchCode(p.code, rules)
+      return inTinRule(m.rule)
+    }
+    const breakSet = options.breaklineCodes ? new Set(options.breaklineCodes) : null
+    const breaklines = objects
+      .filter((o) => (breakSet ? breakSet.has(codeKey(o.points[0].code)) : isBreaklineRule(o.rule)))
+      .map((o) => {
+        const line = o.points.filter(inTin).map((p) => ({ x: p.x, y: p.y, z: p.z, id: p.id }))
+        if (o.rule.kind === 'surface' && line.length >= 3) line.push(line[0])
+        return line
+      })
+      .filter((l) => l.length >= 2)
+    const tinPoints = points.filter(inTin)
+    const excluded = points.length - tinPoints.length
+    tin = buildTin(tinPoints.map((p) => ({ x: p.x, y: p.y, z: p.z, id: p.id })), { breaklines, maxEdge: options.maxEdge || 0 })
     if (!tin) {
       report.push({ level: 'alerte', message: 'Moins de 3 points avec altitude : pas de modèle de terrain ni de courbes de niveau.' })
     } else {
+      report.push({
+        level: 'ok',
+        message: `MNT : triangulation de Delaunay (prédicats exacts) sur ${tin.xs.length} sommets${excluded ? ` (${excluded} point(s) hors sol exclus selon leurs codes)` : ''}, ${tin.constrained} segment(s) de rupture imposé(s), interpolation linéaire sur chaque facette.`,
+      })
+      for (const c of tin.conflicts) report.push({ level: 'alerte', message: c })
       if (tin.discarded) {
         report.push({
           level: 'info',
-          message: `${tin.discarded} triangle(s) de bordure écartés (arêtes de plus de ${tin.maxEdge.toFixed(1)} m) : aucune courbe n'est extrapolée dans les zones non levées.`,
+          message: `${tin.discarded} triangle(s) de bordure écartés (côtés de plus de ${tin.maxEdge.toFixed(1)} m) : aucune courbe n'est extrapolée dans les zones non levées.`,
         })
       }
       if (options.showTin) {
@@ -390,28 +418,32 @@ export function generatePlan(input: SurveyPoint[], rules: CodeRule[], options: P
         const lMajor = L('12_COURBES_MAITRESSES', 0xff0000, 0.3)
         const list = contours(tin, options.contourInterval)
         const major = Math.max(1, options.majorEvery)
-        const decimals = options.contourInterval < 1 ? 2 : 1
+        const decimals = intervalDecimals(options.contourInterval)
         let count = 0
+        let deviation = 0
         for (const c of list) {
           const isMajor = Math.round(c.z / options.contourInterval) % major === 0
-          const pts = options.smoothContours ? smooth(c.pts, c.closed, 2) : c.pts
+          const pts = options.smoothContours ? smooth(c.pts, c.closed, 4) : c.pts
+          if (options.smoothContours) deviation = Math.max(deviation, smoothingDeviation(tin, c.z, pts))
           ds.entities.push({ t: 'pline', layer: isMajor ? lMajor : lMinor, color: -1, pts: Float64Array.from(pts), closed: c.closed, elev: c.z, props: { ALTITUDE: c.z } })
           count++
-          // Cote de la courbe, au milieu, orientée le long de la courbe
-          const n = pts.length >> 1
-          const length = pts.length >= 4 ? Math.hypot(pts[pts.length - 2] - pts[0], pts[pts.length - 1] - pts[1]) : 0
-          if (isMajor && n >= 4 && (c.closed || length > 12 * k)) {
+          // Cote de la courbe, au milieu, orientée le long de la courbe (posée sur un sommet exact)
+          const n = c.pts.length >> 1
+          const length = c.pts.length >= 4 ? Math.hypot(c.pts[c.pts.length - 2] - c.pts[0], c.pts[c.pts.length - 1] - c.pts[1]) : 0
+          if (isMajor && n >= 3 && (c.closed || length > 12 * k)) {
             const i = (n >> 1) * 2
-            const ang = Math.atan2(pts[i + 1] - pts[i - 1], pts[i] - pts[i - 2])
-            ds.entities.push(text(lMajor, pts[i], pts[i + 1], 1.3, c.z.toFixed(decimals), { ha: 1, va: 2, rot: readable(ang) }))
+            const ang = Math.atan2(c.pts[i + 1] - c.pts[i - 1], c.pts[i] - c.pts[i - 2])
+            ds.entities.push(text(lMajor, c.pts[i], c.pts[i + 1], 1.3, c.z.toFixed(decimals), { ha: 1, va: 2, rot: readable(ang) }))
           }
         }
         legend.set('Courbe de niveau', { label: `Courbe de niveau (équidistance ${options.contourInterval} m)`, kind: 'ligne', color: 0xff9f00, symbol: 'croix', lw: 0.13 })
         legend.set('Courbe maîtresse', { label: 'Courbe maîtresse', kind: 'ligne', color: 0xff0000, symbol: 'croix', lw: 0.3 })
+        const check = checkContours(tin, list)
         report.push({
-          level: 'ok',
-          message: `${count} courbe(s) de niveau à l'équidistance ${options.contourInterval} m, interpolées linéairement sur la triangulation${options.smoothContours ? ' puis lissées (lissage cosmétique)' : ''}.`,
+          level: check.crossings || check.maxError > 1e-6 ? 'erreur' : 'ok',
+          message: `${count} courbe(s) de niveau à l'équidistance ${options.contourInterval} m, intersection exacte des facettes du MNT. Contrôle : ${check.vertices} sommets vérifiés, écart maximal au MNT ${check.maxError.toExponential(1)} m, ${check.crossings} croisement entre courbes.`,
         })
+        if (options.smoothContours) report.push({ level: 'alerte', message: `Lissage d'affichage : les courbes passent par les sommets exacts, mais entre eux s'écartent du MNT de ${(deviation * 100).toFixed(1)} cm au plus (en altitude). Décochez « Lisser les courbes » pour un tracé strictement exact.` })
       }
     }
   }
